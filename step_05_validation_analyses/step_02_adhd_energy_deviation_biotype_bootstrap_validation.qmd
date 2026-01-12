@@ -1,0 +1,223 @@
+---
+title: "ADHD Energy Deviation Biotype - Bootstrap Sample Validation"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(SNFtool)
+  library(data.table)
+  library(mclust)
+  library(scales)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Data Preparation
+
+```{r load_subject_info}
+# Load demographic information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+# Remove subjects with missing usage information
+idx_nonNA <- which(!is.na(sub_demo_info$usage))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+# Split into train and test sets
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+```
+
+## Data Analysis
+
+### Energy Calculation
+
+```{r calculate_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_data <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_roi <- energy_data$ROI[idx_nonNA, ]
+energy_network <- energy_data$NetAvg[idx_nonNA, ]
+energy_wholebrain <- as.data.frame(energy_data$WholeBrain[idx_nonNA, ])
+colnames(energy_wholebrain) <- "WholeBrain"
+
+roi_num <- ncol(energy_roi)
+cortex_num <- roi_num - 52
+```
+
+### Energy Deviation
+
+```{r calculate_w_scores}
+# Define covariates for W-score calculation
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_data <- sub_demo_info[, ..covariates]
+
+# Define indices
+train_idx <- which(sub_demo_info$usage == "train")
+test_idx <- which(sub_demo_info$usage == "test")
+adhd_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "adhd")
+td_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "td" & sub_test_info$matched == 1)
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+W_scores_roi <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_roi <- W_scores_roi[adhd_0y_idx, ]
+```
+
+## Biotype Clustering
+
+```{r kmeans_clustering}
+clust_num <- 2
+set.seed(123456)
+kmeans_result <- kmeans(adhd_0y_deviation_roi, centers = clust_num, nstart = 100)
+clust <- kmeans_result$cluster
+
+table(clust)
+```
+
+## Bootstrap Biotype Clustering
+
+```{r generate_bootstrap_samples}
+# Generate bootstrap samples
+set.seed(123456)
+n_sub <- length(adhd_0y_idx)
+n_iter <- 1000
+
+sampled_index <- vector("list", n_iter)
+for (i in 1:n_iter) {
+  sampled_index[[i]] <- sample(1:n_sub, size = 0.8 * n_sub, replace = FALSE)
+}
+```
+
+```{r bootstrap_clustering}
+# Perform clustering on bootstrap samples
+clust_all <- list()
+
+for (i in 1:n_iter) {
+  idx_tmp <- sampled_index[[i]]
+  data_tmp <- adhd_0y_deviation_roi[idx_tmp, ]
+  
+  clust_num <- 2
+  
+  set.seed(123456)
+  kmeans_result <- kmeans(data_tmp, centers = clust_num, nstart = 100)
+  clust_tmp <- kmeans_result$cluster
+  
+  clust_all[[i]] <- clust_tmp
+}
+
+# Save results
+save(sampled_index, clust_all, file = file.path(outpath, "resample_clustering.RData"))
+```
+
+## Adjusted Rand Index
+
+```{r calculate_ari}
+# Load bootstrap results (if needed)
+load(file.path(outpath, "resample_clustering.RData"))
+
+# Calculate ARI for each bootstrap iteration
+ari_boot <- numeric(n_iter)
+
+for (i in 1:n_iter) {
+  idx_tmp <- sampled_index[[i]]
+  clust_1 <- clust[idx_tmp]
+  clust_2 <- clust_all[[i]]
+  ari_boot[i] <- adjustedRandIndex(clust_1, clust_2)
+}
+
+# Summary statistics
+print(paste("Median ARI:", round(median(ari_boot), 3)))
+print(paste("Mean ARI:", round(mean(ari_boot), 3)))
+print(paste("95% CI:", round(quantile(ari_boot, 0.025), 3), "-", round(quantile(ari_boot, 0.975), 3)))
+```
+
+
+```{r plot_ari_distribution}
+library(gghalves)
+library(ggplot2)
+library(dplyr)
+
+# Prepare data (ari_boot is a numeric vector)
+df_plot <- data.frame(
+  Group = factor("ARI", levels = "ARI"),
+  ari_boot = ari_boot
+)
+
+# Color palette (use your existing ones if you want)
+color_palette <- c("#87B2D3")
+color_palette_dark <- c("#5A8DB0")
+
+# Plot ari_boot (single group)
+p_plot <- ggplot(df_plot, aes(x = Group, y = ari_boot, fill = Group, color = Group)) +
+  geom_half_violin(side = "r", alpha = 0.9, trim = FALSE, linewidth = 0.5) +
+  geom_half_point(side = "l", range_scale = 0.5, size = 1, alpha = 0.3) +
+  geom_boxplot(width = 0.1, outlier.shape = NA, fill = NA, alpha = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3,
+               fill = "white", color = "black", stroke = 1) +
+  labs(title = NULL, x = NULL, y = "Adjusted Rand Index") +
+  scale_fill_manual(values = setNames(color_palette, "ARI")) +
+  scale_color_manual(values = setNames(color_palette_dark, "ARI")) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 16.5, color = "black"),
+    axis.title = element_text(size = 16.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = "none",
+    aspect.ratio = 1
+  )
+
+plot(p_plot)
+
+ggsave(paste0(outpath, "/ARI_boot_samples.png"), bg = "transparent", plot = p_plot, width = 10, height = 11, units = "cm", dpi = 1200)
+
+```

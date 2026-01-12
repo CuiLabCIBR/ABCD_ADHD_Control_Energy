@@ -1,0 +1,347 @@
+---
+title: "ABCD_Participants_For_Normative_Modelling"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(ggplot2)
+  library(data.table)
+  library(MatchIt)
+  library(compareGroups)
+  library(gghalves)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+
+sub_demo_info <- fread(paste0(behav_path, "/sub_demo_info.csv"))
+sub_demo_info_raw <- sub_demo_info
+
+# exclude subjects with incomplete covariates
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", "network_strength_schaefer400", "network_strength_schaefer200")
+
+sub_demo_cov <- sub_demo_info[, ..covariates]
+idx_nonNA <- which(complete.cases(sub_demo_cov))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+sub_demo_info$eventname <- factor(sub_demo_info$eventname, 
+                                  levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"))
+```
+
+# Test set
+## Match TD with ADHD at the baseline
+
+```{r td_baseline}
+# get the baseline data
+adhd_0y <- sub_demo_info %>% 
+  filter(diagnosis == "adhd" & eventname == "baseline_year_1_arm_1") %>% 
+  select(src_subject_id, eventname, age, sex, handedness, diagnosis, site_id, mean_fd, TBV, network_strength_schaefer400)
+adhd_0y$treat <- 1
+
+td_0y <- sub_demo_info %>%
+  filter(diagnosis == "td" & eventname == "baseline_year_1_arm_1") %>%
+  select(src_subject_id, eventname, age, sex, handedness, diagnosis, site_id, mean_fd, TBV, network_strength_schaefer400)
+td_0y$treat <- 0
+
+sub_0y <- rbind(adhd_0y, td_0y)
+
+# propensity score matching (PSM)
+ps_match <- matchit(treat ~ age + sex + handedness + mean_fd + TBV + network_strength_schaefer400, 
+                    data = sub_0y, method = "nearest", distance = "glm")
+summary(ps_match)
+
+sub_0y_matched <- match.data(ps_match)
+
+# adhd
+filter(sub_0y_matched, treat == 1) %>%
+  select(age, sex, site_id, mean_fd, TBV, network_strength_schaefer400) %>%
+  summary()
+
+# matched td
+filter(sub_0y_matched, treat == 0) %>%
+  select(age, sex, site_id, mean_fd, TBV, network_strength_schaefer400) %>%
+  summary()
+
+# get the exact adhd-td pair
+matched_data <- match.data(ps_match)
+
+pair_table <- matched_data %>%
+  mutate(group = ifelse(treat == 1, "adhd_id", "td_id")) %>%
+  select(subclass, src_subject_id, group) %>%
+  pivot_wider(names_from = group, values_from = src_subject_id)
+
+fwrite(pair_table, paste0(behav_path, "adhd_td_pair_test.csv"), row.names = FALSE)
+```
+
+# Training set
+## Get the TD training set
+
+```{r td_train}
+td_0y_test <- sub_0y_matched %>% 
+  filter(treat == 0) %>% 
+  select(src_subject_id)
+
+# Exclude test TDC subjects
+td_train_info <- sub_demo_info %>% 
+  filter(!(src_subject_id %in% td_0y_test$src_subject_id) & diagnosis == "td")
+
+# Get subjects with two timepoints
+sub_td_0y_train <- td_train_info %>% 
+  filter(eventname == "baseline_year_1_arm_1") %>% 
+  pull(src_subject_id)
+
+sub_td_2y_train <- td_train_info %>% 
+  filter(eventname == "2_year_follow_up_y_arm_1") %>% 
+  pull(src_subject_id)
+
+sub_td_0y_2y_train <- intersect(sub_td_0y_train, sub_td_2y_train)
+
+# Randomly exclude one timepoint
+set.seed(123456)  # Setting seed for reproducibility
+event_rand <- sample(c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"), 
+                     size = length(sub_td_0y_2y_train), replace = TRUE)
+table(event_rand)
+td_train_repeated <- data.frame(src_subject_id = sub_td_0y_2y_train, eventname = event_rand)
+
+# temp <- td_train_repeated
+# td_train_repeated[temp == "baseline_year_1_arm_1"] <- "2_year_follow_up_y_arm_1"
+# td_train_repeated[temp == "2_year_follow_up_y_arm_1"] <- "baseline_year_1_arm_1"
+
+# Exclude
+sub_train_info <- anti_join(td_train_info, td_train_repeated, by = c("src_subject_id", "eventname"))
+sub_train_info$usage <- "train"
+
+# check there are >10 subjects within each site for male/female
+table(td_train_info[, c("site_id", "sex")])
+```
+## Update test set
+
+-   Matched TD subjects at baseline
+-   ADHD subjects at baseline
+-   ADHD subjects at 2-year follow-up
+
+```{r test_set}
+sub_test_info <- anti_join(sub_demo_info, sub_train_info, by = c("src_subject_id", "eventname"))
+sub_test_info <- anti_join(sub_test_info, td_train_repeated, by = c("src_subject_id", "eventname"))
+
+# Select matched TD controls at baseline (0y)
+td_test_0y <- sub_test_info %>% 
+  filter(diagnosis == "td", eventname == "baseline_year_1_arm_1")
+
+# Select ADHD participants at baseline (0y)
+adhd_test_0y <- sub_test_info %>% 
+  filter(diagnosis == "adhd", eventname == "baseline_year_1_arm_1")
+
+# Select ADHD participants at 2-year follow-up (2y)
+adhd_test_2y <- sub_test_info %>% 
+  filter(src_subject_id %in% adhd_test_0y$src_subject_id, eventname == "2_year_follow_up_y_arm_1")
+
+sub_test_info <- rbind(td_test_0y, adhd_test_0y, adhd_test_2y)
+sub_test_info$usage <- "test"
+
+table(sub_test_info[, c("eventname", "diagnosis")])
+
+fwrite(sub_test_info, paste0(behav_path, "sub_test_info.csv"), row.names = FALSE)
+```
+
+# Save results
+## Add train/test label
+```{r usage_label}
+# add usage label for train and test
+sub_demo_info$usage <- NA
+
+sub_demo_info <- sub_demo_info %>%
+  mutate(
+    id_event = paste(src_subject_id, eventname),
+    usage = if_else(id_event %in% paste(sub_test_info$src_subject_id, sub_test_info$eventname), "test",
+                    if_else(id_event %in% paste(sub_train_info$src_subject_id, sub_train_info$eventname), "train", usage))
+  ) %>%
+  select(-id_event)
+
+table(sub_demo_info$usage)
+```
+
+```{r save_basic}
+sub_demo_info_basic <- sub_demo_info %>% 
+  select(src_subject_id, eventname, age, sex, diagnosis, site_id, mean_fd, TBV, 
+         network_strength_schaefer400, network_strength_schaefer200, usage)
+
+fwrite(sub_demo_info_basic, paste0(behav_path, "sub_demo_info_basic_train_test.csv"), row.names = FALSE)
+
+# back to the original table
+sub_demo_info_train_test <- merge(sub_demo_info_raw, sub_demo_info[, c("src_subject_id", "eventname", "usage")], 
+                                  by = c("src_subject_id", "eventname"), all.x = TRUE)
+
+sub_demo_info_train_test <- sub_demo_info_train_test %>%
+  arrange(src_subject_id, factor(eventname, levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")))
+
+fwrite(sub_demo_info_train_test, paste0(behav_path, "sub_demo_info_train_test.csv"), row.names = FALSE)
+```
+
+
+# Summary
+```{r compare}
+# Define variable groups
+demo_var <- c("age", "sex", "race", "handedness", "diagnosis", "usage")
+mri_var <- c("mean_fd", "TBV", "network_strength_schaefer400")
+behav_var <- c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")
+
+df_train_td_0y <- sub_demo_info %>%
+  filter(usage == "train", eventname == "baseline_year_1_arm_1") %>%
+  select(all_of(c(demo_var, mri_var, behav_var)))
+
+df_test_td_0y <- sub_demo_info %>%
+  filter(usage == "test", diagnosis == "td", eventname == "baseline_year_1_arm_1") %>%
+  select(all_of(c(demo_var, mri_var, behav_var)))
+
+df_test_adhd_0y <- sub_demo_info %>%
+  filter(usage == "test", diagnosis == "adhd", eventname == "baseline_year_1_arm_1") %>%
+  select(all_of(c(demo_var, mri_var, behav_var)))
+
+df_train_td_2y <- sub_demo_info %>%
+  filter(usage == "train", eventname == "2_year_follow_up_y_arm_1") %>%
+  select(all_of(c(demo_var, mri_var, behav_var)))
+
+df_test_adhd_2y <- sub_demo_info %>%
+  filter(usage == "test", diagnosis == "adhd", eventname == "2_year_follow_up_y_arm_1") %>%
+  select(all_of(c(demo_var, mri_var, behav_var)))
+
+df_td_0y <- rbind(df_train_td_0y, df_test_td_0y)
+df_test_0y <- rbind(df_test_adhd_0y, df_test_td_0y)
+df_td_adhd_2y <- rbind(df_train_td_2y, df_test_adhd_2y)
+
+#
+factor_var <- c("sex", "race", "handedness", "diagnosis", "usage")
+df_td_0y[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+df_test_0y[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+df_td_adhd_2y[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+# Baseline TDC: Training vs Test
+df_td_0y <- df_td_0y %>%  select(-diagnosis)
+res_td_0y <- compareGroups(usage ~ ., data = as.data.table(df_td_0y))
+restab_td_0y <- createTable(res_td_0y)
+
+cat("Baseline TDC: Training vs Test")
+print(restab_td_0y)
+
+export2word(restab_td_0y, paste0(behav_path, "/restab_td_0y.docx"))
+
+# Baseline Test: TDC vs ADHD
+df_test_0y <- df_test_0y %>%  select(-usage)
+res_test_0y <- compareGroups(diagnosis ~ ., data = as.data.table(df_test_0y))
+restab_test_0y <- createTable(res_test_0y)
+
+cat("Baseline Test: TDC vs ADHD")
+print(restab_test_0y)
+
+export2word(restab_test_0y, paste0(behav_path, "/restab_test_0y.docx"))
+
+# 2-year follow up: Training TDC vs Test ADHD
+df_td_adhd_2y <- df_td_adhd_2y %>%  select(-usage)
+res_td_adhd_2y <- compareGroups(diagnosis ~ ., data = as.data.table(df_td_adhd_2y))
+restab_td_adhd_2y <- createTable(res_td_adhd_2y)
+
+cat("2-year follow up: Training TDC vs Test ADHD")
+print(restab_td_adhd_2y)
+
+export2word(restab_td_adhd_2y, paste0(behav_path, "/restab_td_adhd_2y.docx"))
+```
+
+```{r age_sex_distribution}
+# Prepare data
+df_plot <- sub_demo_info_basic %>%
+  filter(!is.na(age)) %>%
+  filter(eventname %in% c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")) %>%
+  filter(usage %in% c("train", "test")) %>%
+  filter(diagnosis %in% c("td", "adhd")) %>%
+  mutate(
+    sex = factor(sex, levels = c("Male", "Female")),
+    eventname = factor(eventname, 
+                       levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"),
+                       labels = c("Baseline", "2-Year Follow-up")),
+    usage = factor(usage, levels = c("train", "test"), labels = c("Train", "Test")),
+    diagnosis = factor(diagnosis, levels = c("td", "adhd"), labels = c("TD", "ADHD"))
+  )
+
+# Color palette
+color_palette <- c("#87B2D3", "#EE7677")
+color_palette_dark <- c("#5A8DB0", "#D84A4C")
+
+# Create plot with three-way faceting
+p_plot <- ggplot(df_plot, aes(x = sex, y = age, fill = sex, color = sex)) +
+  geom_half_violin(side = "r", alpha = 0.9, trim = TRUE, aes(color = sex), linewidth = 0.5) +
+  geom_half_point(side = "l", range_scale = 0.5, size = 1, alpha = 0.3) +
+  geom_boxplot(width = 0.1, outlier.shape = NA, fill = NA, alpha = 0.9, 
+               position = position_nudge(x = 0), color = "black") +
+  facet_wrap(~ diagnosis + usage + eventname, nrow = 1) +
+  labs(title = NULL, x = NULL, y = "Age") +
+  scale_fill_manual(values = color_palette) +
+  scale_color_manual(values = color_palette_dark) +
+  theme_classic() +
+  scale_y_continuous(expand = c(0.01, 0), limits = c(7.8, 14.5), breaks = seq(8, 14, by = 2)) +
+  theme(
+    axis.text = element_text(size = 16, color = 'black'), 
+    axis.title = element_text(size = 16), 
+    axis.text.x = element_blank(),
+    legend.position = "none",
+    strip.text = element_blank(),
+    strip.background = element_blank(),
+    panel.spacing = unit(0.5, "lines"),
+    aspect.ratio = 1
+  )
+
+# Display plot
+plot(p_plot)
+ggsave(paste0(behav_path, "p_plot_age.png"), plot = p_plot, width = 30, height = 8, units = "cm", dpi = 1200)
+
+# Calculate and display sample sizes for each combination
+sample_sizes <- df_plot %>%
+  group_by(eventname, usage, diagnosis) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(eventname, usage, diagnosis)
+
+print(sample_sizes)
+
+sample_sizes <- df_plot %>%
+  group_by(diagnosis) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(diagnosis)
+
+print(sample_sizes)
+
+sample_sizes <- df_plot %>%
+  group_by(usage) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(usage)
+
+print(sample_sizes)
+
+```

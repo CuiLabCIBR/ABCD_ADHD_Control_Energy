@@ -1,0 +1,485 @@
+---
+title: "ADHD Energy Deviation Longitudinal Analysis - Null Model"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(data.table)
+  library(compareGroups)
+  library(scales)
+  library(RColorBrewer)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+
+# Define color palette
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+```
+
+## Data Preparation
+
+```{r load_data}
+# Load energy deviation data
+load(file.path(outpath, "energy_deviation.RData"))
+
+# Load demographic and biotype information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+# Merge biotype information
+biotype_info <- read.csv(paste0(outpath, "/adhd_biotype_info.csv"))
+sub_test_info <- merge(sub_test_info, biotype_info[, c("src_subject_id", "biotype")], by = "src_subject_id", all.x = TRUE)
+sub_test_info$W_scores_wholebrain <- W_scores_wholebrain
+```
+
+## Real Data Analysis
+
+```{r prepare_longitudinal_data}
+# Define CBCL variables
+cbcl_vars <- c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")
+
+# Identify ADHD subjects at baseline with 2-year follow-up data
+sub_adhd_0y <- sub_test_info %>% 
+  filter(diagnosis == "adhd" & eventname == "baseline_year_1_arm_1") %>%
+  pull(src_subject_id)
+
+adhd_long_data <- sub_test_info %>%
+  filter(src_subject_id %in% sub_adhd_0y) %>%
+  group_by(src_subject_id) %>%
+  filter(n() == 2) %>%
+  ungroup() %>%
+  mutate(eventname = factor(eventname, levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")))
+```
+
+```{r paired_ttest_biotype1}
+# Paired t-test for biotype1
+adhd_biotype1_0y <- adhd_long_data %>% 
+  filter(biotype == "biotype1" & eventname == "baseline_year_1_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+adhd_biotype1_2y <- adhd_long_data %>% 
+  filter(biotype == "biotype1" & eventname == "2_year_follow_up_y_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+t_biotype1_obs <- t.test(adhd_biotype1_2y$W_scores_wholebrain, adhd_biotype1_0y$W_scores_wholebrain, paired = TRUE)
+print(t_biotype1_obs)
+```
+
+```{r paired_ttest_biotype2}
+# Paired t-test for biotype2
+adhd_biotype2_0y <- adhd_long_data %>% 
+  filter(biotype == "biotype2" & eventname == "baseline_year_1_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+adhd_biotype2_2y <- adhd_long_data %>% 
+  filter(biotype == "biotype2" & eventname == "2_year_follow_up_y_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+t_biotype2_obs <- t.test(adhd_biotype2_2y$W_scores_wholebrain, adhd_biotype2_0y$W_scores_wholebrain, paired = TRUE)
+print(t_biotype2_obs)
+```
+
+## Null Model Analysis
+
+```{r load_null_data}
+# Load null model energy deviation data
+load(file.path(outpath, "energy_deviation_null.RData"))
+adhd_info <- fread(file.path(outpath, "adhd_biotype_info.csv"), na.strings = c("", "NA"))
+
+# Extract subject IDs for each biotype
+adhd_biotype1_id <- adhd_long_data %>% filter(biotype == "biotype1" & eventname == "baseline_year_1_arm_1") %>% pull(src_subject_id)
+adhd_biotype2_id <- adhd_long_data %>% filter(biotype == "biotype2" & eventname == "baseline_year_1_arm_1") %>% pull(src_subject_id)
+
+# Extract indices for null data
+biotype1_0y_idx_null <- which(sub_test_info$src_subject_id %in% adhd_biotype1_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+biotype2_0y_idx_null <- which(sub_test_info$src_subject_id %in% adhd_biotype2_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+biotype1_2y_idx_null <- which(sub_test_info$src_subject_id %in% adhd_biotype1_id & sub_test_info$eventname == "2_year_follow_up_y_arm_1")
+biotype2_2y_idx_null <- which(sub_test_info$src_subject_id %in% adhd_biotype2_id & sub_test_info$eventname == "2_year_follow_up_y_arm_1")
+
+# Extract null energy scores for each group
+W_scores_biotype1_0y_null <- lapply(W_scores_null_wholebrain, `[`, biotype1_0y_idx_null)
+W_scores_biotype2_0y_null <- lapply(W_scores_null_wholebrain, `[`, biotype2_0y_idx_null)
+W_scores_biotype1_2y_null <- lapply(W_scores_null_wholebrain, `[`, biotype1_2y_idx_null)
+W_scores_biotype2_2y_null <- lapply(W_scores_null_wholebrain, `[`, biotype2_2y_idx_null)
+```
+
+```{r calculate_null_ttest}
+# Calculate t-statistics for each null iteration
+# biotype1
+t_biotype1_null <- map_dbl(1:101, ~ t.test(W_scores_biotype1_2y_null[[.x]],
+                                           W_scores_biotype1_0y_null[[.x]], paired = TRUE)$statistic)
+
+t_biotype1 <- tibble(t_null = t_biotype1_null)
+t_biotype1_median_value <- median(t_biotype1$t_null, na.rm = TRUE)
+t_biotype1_median_idx <- which(t_biotype1$t_null == t_biotype1_median_value)
+
+biotype1_0y_null_median <- W_scores_biotype1_0y_null[[t_biotype1_median_idx]]
+biotype1_2y_null_median <- W_scores_biotype1_2y_null[[t_biotype1_median_idx]]
+
+t_biotype1_median_null <- t.test(biotype1_2y_null_median, biotype1_0y_null_median, paired = TRUE)
+print(t_biotype1_median_null)
+
+# biotype2
+t_biotype2_null <- map_dbl(1:101, ~ t.test(W_scores_biotype2_2y_null[[.x]],
+                                           W_scores_biotype2_0y_null[[.x]], paired = TRUE)$statistic)
+
+t_biotype2 <- tibble(t_null = t_biotype2_null)
+t_biotype2_median_value <- median(t_biotype2$t_null, na.rm = TRUE)
+t_biotype2_median_idx <- which(t_biotype2$t_null == t_biotype2_median_value)
+
+biotype2_0y_null_median <- W_scores_biotype2_0y_null[[t_biotype2_median_idx]]
+biotype2_2y_null_median <- W_scores_biotype2_2y_null[[t_biotype2_median_idx]]
+
+t_biotype2_median_null <- t.test(biotype2_2y_null_median, biotype2_0y_null_median, paired = TRUE)
+print(t_biotype2_median_null)
+```
+
+```{r plot_null_distribution_biotype1}
+# Plot null distribution with real t-statistic - Biotype1
+
+fig1 <- ggplot(t_biotype1, aes(x = t_null)) +
+  geom_histogram(aes(y = after_stat(count)), bins = 40, fill = "gray70", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = t_biotype1_obs$statistic), color = "#E00000", linewidth = 1) +
+  annotate("text", x = t_biotype1_obs$statistic, y = 5, label = paste0("Empirical = ", sprintf("%.2f", t_biotype1_obs$statistic)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  geom_vline(xintercept = t_biotype1_median_value, color = "gray50", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = t_biotype1_median_value, y = 5, label = paste0("Median = ", sprintf("%.2f", t_biotype1_median_value)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  # scale_x_continuous(limits = c(-10, 3.5), breaks = seq(-9, 3, 3)) +
+  labs(x = "T value", y = "Frequency") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    plot.title = element_text(hjust = 0.5),
+    aspect.ratio = 0.8
+  )
+
+print(fig1)
+ggsave(file.path(outpath, "biotype1_wholebrain_long_null.png"), plot = fig1, width = 12, height = 10, units = "cm", dpi = 1200)
+```
+
+```{r plot_null_distribution_biotype2}
+# Plot null distribution with real t-statistic - Biotype2
+t_biotype2 <- tibble(t_null = t_biotype2_null)
+median_value <- median(t_biotype2$t_null, na.rm = TRUE)
+
+fig2 <- ggplot(t_biotype2, aes(x = t_null)) +
+  geom_histogram(aes(y = after_stat(count)), bins = 30, fill = "gray70", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = t_biotype2_obs$statistic), color = "#E00000", linewidth = 1) +
+  annotate("text", x = t_biotype2_obs$statistic, y = 16, label = paste0("Empirical = ", sprintf("%.2f", t_biotype2_obs$statistic)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  geom_vline(xintercept = t_biotype2_median_value, color = "gray50", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = t_biotype2_median_value, y = 16, label = paste0("Median = ", sprintf("%.2f", t_biotype2_median_value)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(limits = c(-10, 3.5), breaks = seq(-9, 3, 3)) +
+  labs(x = "T value", y = "Frequency") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    plot.title = element_text(hjust = 0.5),
+    aspect.ratio = 0.8
+  )
+
+print(fig2)
+ggsave(file.path(outpath, "biotype2_wholebrain_long_null.png"), plot = fig2, width = 12, height = 10, units = "cm", dpi = 1200)
+```
+
+
+```{r prepare_null_longdata}
+# Prepare null longitudinal data for visualization
+n1 <- length(biotype1_0y_null_median)
+n2 <- length(biotype2_0y_null_median)
+
+adhd_long_data_null <- data.frame(
+  src_subject_id = rep(c(adhd_biotype1_id, adhd_biotype2_id), 2),
+  W_scores_wholebrain = c(biotype1_0y_null_median, biotype2_0y_null_median,
+                          biotype1_2y_null_median, biotype2_2y_null_median),
+  biotype = rep(rep(c("biotype1", "biotype2"), c(n1, n2)), 2),
+  eventname = rep(c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"), each = n1 + n2)
+) %>% 
+  mutate(eventname = factor(eventname, levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")))
+```
+
+
+```{r plot_biotype1_tdc1_diff_median}
+adhd_long_data_null_biotype1 <- filter(adhd_long_data_null, biotype == "biotype1")
+
+p <- ggplot(adhd_long_data_null_biotype1, aes(x = eventname, y = W_scores_wholebrain, fill = eventname)) + 
+  geom_boxplot(alpha = 0.4, outlier.shape = NA) + 
+  geom_point(width = 0.15, size = 1.5) +
+  geom_line(aes(group = src_subject_id), color = "gray", linetype = "dashed") +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", linewidth = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c(color_palette[1], color_palette[1])) + 
+  scale_x_discrete(labels = c("baseline", "2-year")) +
+  scale_y_continuous(breaks = seq(4, 10, 2)) +
+  labs(y = "Energy Deviation", x = "") +
+  theme_classic() + 
+  theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"), 
+        axis.title = element_text(size = 20), plot.title = element_text(size = 20, color = "black", hjust = 0.5), aspect.ratio = 1.4)
+
+print(p)
+
+ggsave(file.path(outpath, "biotype1_wholebrain_diff_median_null.png"), plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+
+
+```
+
+```{r plot_biotype2_tdc2_diff_median}
+adhd_long_data_null_biotype2 <- filter(adhd_long_data_null, biotype == "biotype2")
+
+p <- ggplot(adhd_long_data_null_biotype2, aes(x = eventname, y = W_scores_wholebrain, fill = eventname)) + 
+  geom_boxplot(alpha = 0.4, outlier.shape = NA) + 
+  geom_point(width = 0.15, size = 1.5) +
+  geom_line(aes(group = src_subject_id), color = "gray", linetype = "dashed") +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", linewidth = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c(color_palette[2], color_palette[2])) + 
+  scale_x_discrete(labels = c("baseline", "2-year")) +
+  scale_y_continuous(breaks = seq(4, 10, 2)) +
+  labs(y = "Energy Deviation", x = "") +
+  theme_classic() + 
+  theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"), 
+        axis.title = element_text(size = 20), plot.title = element_text(size = 20, color = "black", hjust = 0.5), aspect.ratio = 1.4)
+
+print(p)
+
+ggsave(file.path(outpath, "biotype2_wholebrain_diff_median_null.png"), plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+```
+
+
+## Permutation Test for Correlation Analysis
+
+```{r calculate_diff_scores}
+# Calculate change scores for real data
+biotype1_diff <- adhd_biotype1_2y - adhd_biotype1_0y
+biotype2_diff <- adhd_biotype2_2y - adhd_biotype2_0y
+
+# Observed correlations
+r_biotype1_attention_obs <- cor.test(biotype1_diff$W_scores_wholebrain, 
+                                       biotype1_diff$cbcl_scr_syn_attention_t)$estimate
+r_biotype1_external_obs <- cor.test(biotype1_diff$W_scores_wholebrain, 
+                                      biotype1_diff$cbcl_scr_syn_external_t)$estimate
+
+r_biotype2_attention_obs <- cor.test(biotype2_diff$W_scores_wholebrain, 
+                                     biotype2_diff$cbcl_scr_syn_attention_t)$estimate
+r_biotype2_external_obs <- cor.test(biotype2_diff$W_scores_wholebrain, 
+                                    biotype2_diff$cbcl_scr_syn_external_t)$estimate
+```
+
+
+```{r permutation_correlation_biotype2}
+# Permutation test for biotype2 correlations
+n_iter <- 101
+r_biotype2_attention_null <- numeric(n_iter)
+r_biotype2_external_null <- numeric(n_iter)
+
+for (iter_i in 1:n_iter) {
+  W_scores_diff_null <- W_scores_biotype2_2y_null[[iter_i]] - W_scores_biotype2_0y_null[[iter_i]]
+  
+  r_biotype2_attention_null[iter_i] <- cor.test(W_scores_diff_null, biotype2_diff$cbcl_scr_syn_attention_t)$estimate
+  r_biotype2_external_null[iter_i] <- cor.test(W_scores_diff_null, biotype2_diff$cbcl_scr_syn_external_t)$estimate
+}
+
+p_biotype2_attention <- (1 + sum(r_biotype2_attention_null >= r_biotype2_attention_obs))/n_iter
+p_biotype2_external <- (1 + sum(r_biotype2_external_null >= r_biotype2_external_obs))/n_iter
+
+# external
+r_biotype2_external <- tibble(r_null = r_biotype2_external_null)
+r_biotype2_external_median_value <- median(r_biotype2_external$r_null, na.rm = TRUE)
+r_biotype2_external_median_idx <- which(r_biotype2_external$r_null == r_biotype2_external_median_value)
+
+biotype2_0y_null_median <- W_scores_biotype2_0y_null[[r_biotype2_external_median_idx]]
+biotype2_2y_null_median <- W_scores_biotype2_2y_null[[r_biotype2_external_median_idx]]
+biotype2_diff_external <- biotype2_2y_null_median - biotype2_0y_null_median
+
+r_biotype2_external_median_null <- cor.test(biotype2_diff_external, biotype2_diff$cbcl_scr_syn_external_t)$estimate
+print(r_biotype2_external_median_null)
+```
+
+```{r plot_null_correlation_biotype2_attention}
+r_attention_df <- tibble(r_null = r_biotype2_attention_null)
+r_attention_median <- median(r_attention_df$r_null, na.rm = TRUE)
+
+p <- ggplot(r_attention_df, aes(x = r_null)) +
+  geom_histogram(bins = 30, fill = "gray70", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = r_biotype2_attention_obs), 
+             color = "#E00000", linewidth = 1) +
+  annotate("text", x = r_biotype2_attention_obs, y = 7, 
+           label = paste0("Empirical = ", sprintf("%.2f", r_biotype2_attention_obs)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  geom_vline(xintercept = r_attention_median, 
+             color = "gray50", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = r_attention_median, y = 7, 
+           label = paste0("Median = ", sprintf("%.2f", r_attention_median)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Pearson's correlation", y = "Frequency") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    plot.title = element_text(hjust = 0.5),
+    aspect.ratio = 0.68
+  )
+
+print(p)
+
+ggsave(file.path(outpath, "corr_energy_diff_attention_diff_null_dist.png"), plot = p, width = 12, height = 10, units = "cm", dpi = 1200)
+```
+
+```{r plot_null_correlation_biotype2_external}
+r_external_df <- tibble(r_null = r_biotype2_external_null)
+r_external_median <- median(r_external_df$r_null, na.rm = TRUE)
+
+p <- ggplot(r_external_df, aes(x = r_null)) +
+  geom_histogram(bins = 30, fill = "gray70", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = r_biotype2_external_obs), 
+             color = "#E00000", linewidth = 1) +
+  annotate("text", x = r_biotype2_external_obs, y = 7, 
+           label = paste0("Empirical = ", sprintf("%.2f", r_biotype2_external_obs)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  geom_vline(xintercept = r_external_median, 
+             color = "gray50", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = r_external_median, y = 7, 
+           label = paste0("Median = ", sprintf("%.2f", r_external_median)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Pearson's correlation", y = "Frequency") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    plot.title = element_text(hjust = 0.5),
+    aspect.ratio = 0.68
+  )
+
+print(p)
+
+ggsave(file.path(outpath, "corr_energy_diff_external_diff_null_dist.png"), plot = p, width = 12, height = 10, units = "cm", dpi = 1200)
+```
+
+
+```{r corr_attention_median}
+# attention
+r_biotype2_attention <- tibble(r_null = r_biotype2_attention_null)
+r_biotype2_attention_median_value <- median(r_biotype2_attention$r_null, na.rm = TRUE)
+r_biotype2_attention_median_idx <- which(r_biotype2_attention$r_null == r_biotype2_attention_median_value)
+
+biotype2_0y_null_median <- W_scores_biotype2_0y_null[[r_biotype2_attention_median_idx]]
+biotype2_2y_null_median <- W_scores_biotype2_2y_null[[r_biotype2_attention_median_idx]]
+biotype2_diff_attention <- biotype2_2y_null_median - biotype2_0y_null_median
+
+r_biotype2_attention_median_null <- cor.test(biotype2_diff_attention, biotype2_diff$cbcl_scr_syn_attention_t)$estimate
+cor.test(biotype2_diff_attention, biotype2_diff$cbcl_scr_syn_attention_t)
+
+biotype2_diff_null <- data.frame(W_scores_wholebrain = biotype2_diff_attention,
+                                 cbcl_scr_syn_attention_t = biotype2_diff$cbcl_scr_syn_attention_t)
+```
+
+```{r plot_corr_attention_median}
+p <- ggplot(biotype2_diff_null, aes(x = W_scores_wholebrain, y = cbcl_scr_syn_attention_t)) + 
+  geom_point() +
+  geom_smooth(method = lm, color = color_palette[1]) +
+  labs(x = "ΔEnergy deviation", y = "ΔAttention probelms") +
+  theme_classic() + 
+  scale_y_continuous(limits = c(-32, 32), breaks = seq(-30, 30, 15)) +
+  scale_x_continuous(limits = c(-4.1, 4.3), breaks = seq(-4, 4, 2)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12),
+    strip.text = element_text(size = 20),
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title = element_text(size = 20),
+    axis.title.x = element_text(margin = margin(t = 8)),
+    aspect.ratio = 1
+  )
+
+print(p)
+ggsave(file.path(outpath, "corr_energy_diff_attention_diff_null.png"), plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+```
+
+```{r corr_external_median}
+# external
+r_biotype2_external <- tibble(r_null = r_biotype2_external_null)
+r_biotype2_external_median_value <- median(r_biotype2_external$r_null, na.rm = TRUE)
+r_biotype2_external_median_idx <- which(r_biotype2_external$r_null == r_biotype2_external_median_value)
+
+biotype2_0y_null_median <- W_scores_biotype2_0y_null[[r_biotype2_external_median_idx]]
+biotype2_2y_null_median <- W_scores_biotype2_2y_null[[r_biotype2_external_median_idx]]
+biotype2_diff_external <- biotype2_2y_null_median - biotype2_0y_null_median
+
+r_biotype2_external_median_null <- cor.test(biotype2_diff_external, biotype2_diff$cbcl_scr_syn_external_t)$estimate
+cor.test(biotype2_diff_external, biotype2_diff$cbcl_scr_syn_external_t)
+
+biotype2_diff_null <- data.frame(W_scores_wholebrain = biotype2_diff_external,
+                                 cbcl_scr_syn_external_t = biotype2_diff$cbcl_scr_syn_external_t)
+
+```
+
+
+```{r plot_corr_external_median}
+# Scatter plot: Energy deviation change vs external score change (Biotype2)
+p <- ggplot(biotype2_diff_null, aes(x = W_scores_wholebrain, y = cbcl_scr_syn_external_t)) + 
+  geom_point() +
+  geom_smooth(method = lm, color = color_palette[1]) +
+  labs(x = "ΔEnergy deviation", y = "ΔExternalizing problems") +
+  theme_classic() + 
+  scale_y_continuous(limits = c(-29, 25), breaks = seq(-20, 20, 10)) +
+  scale_x_continuous(limits = c(-3.4, 3.4), breaks = seq(-3, 3, 3)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12),
+    strip.text = element_text(size = 20),
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title = element_text(size = 20),
+    aspect.ratio = 1
+  )
+
+print(p)
+ggsave(file.path(outpath, "corr_energy_diff_external_diff_null.png"), plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+```

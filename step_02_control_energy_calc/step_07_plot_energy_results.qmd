@@ -1,0 +1,297 @@
+---
+title: "Task Activation & Control Energy Plot"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(ggplot2)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(data.table)
+  library(scales)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface_thr.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+
+# Create output directories
+plot_path <- file.path(root_path, "results/plots", task_contrast, atlas)
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(plot_path, recursive = TRUE, showWarnings = FALSE)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+
+# Define network labels and colors
+network_names <- c("VS", "SM", "DA", "VA", "LM", "FP", "DM", "SC")
+network_colors <- c("#974DA1", "#89B4D8", "#398E43", "#DE89FF", "#F2ECBA", "#FFC87F", "#F68F9F", "#edede9")
+
+cmap <- rev(c("#D6604D" , "#F4A582" , "#FDDBC7", "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3"))
+```
+
+## Task activation
+Plot the task activation map for N-back (https://github.com/sahahn/ABCD_Consortium_Analysis/tree/master/Nifti_Maps/nBack/Activations)
+```{r plot_activation}
+activation_path <- paste0(root_path, "data/task_activation/nBack/")
+
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+
+# Load atlas labels and define color map
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_region_labels.csv"))
+schaefer_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+
+nback <- read.table(file.path(activation_path, "ABCD_2Back_0Back_452.txt"), header = FALSE, sep = "\t")
+
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_region_labels.csv"))
+brain_plot_data <- data.frame(label = atlas_label, deviation = nback$V1[1:400])
+
+thr <- 0.4
+
+plot_surface_thr(data = brain_plot_data, thr = thr, atlas = schaefer7_400, cmap = cmap,
+                 outpath = paste0(plot_path, "/nback_activation"))
+```
+
+
+Plot the control energy
+## Control Energy
+
+```{r load_subject_info}
+# Load demographic information and extract baseline TD subjects from test set
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+td_0y_idx <- which(sub_demo_info$eventname == "baseline_year_1_arm_1" & 
+                   sub_demo_info$diagnosis == "td" & 
+                   sub_demo_info$usage == "test")
+
+adhd_0y_idx <- which(sub_demo_info$eventname == "baseline_year_1_arm_1" & 
+                       sub_demo_info$diagnosis == "adhd" & 
+                       sub_demo_info$usage == "test")
+```
+
+### TDC
+
+```{r plot_tdc_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_real <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_real_roi <- energy_real$ROI[td_0y_idx, ]
+energy_real_wholebrain <- energy_real$WholeBrain[td_0y_idx, ]
+
+# Load atlas labels
+file_name <- paste0("ABCD_", task_contrast, "_", atlas)
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+network_label <- atlas_label$Net_Label
+
+# Calculate network-average control energy (log-transformed)
+energy_roi_avg <- log(colMeans(energy_real_roi))
+plot_data_network <- data.frame(energy = energy_roi_avg, network = network_label)
+plot_data_network$network <- factor(plot_data_network$network, levels = 1:8, labels = network_names)
+
+# Boxplot: Network-level control energy distribution
+p_network <- ggplot(plot_data_network, aes(x = network, y = energy)) +
+  geom_boxplot(fill = network_colors, width = 0.7, outlier.size = 0.8) + 
+  geom_jitter(size = 0.8) +
+  labs(x = "", y = "Log(Control Energy)") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 16, colour = "black", angle = 32, hjust = 1), 
+        axis.text.y = element_text(size = 16, colour = "black"), 
+        axis.title = element_text(size = 16), 
+        aspect.ratio = 0.8)
+print(p_network)
+ggsave(paste0(plot_path, "/Energy_", task_contrast, "_net_boxplot.png"), plot = p_network, width = 12, height = 10, units = "cm")
+
+# Brain map: Regional control energy visualization
+switch(atlas, 
+  "schaefer400" = {
+    roi_label <- read.csv(paste0(root_path, "data/parcellation/schaefer400_region_labels.csv"))
+    brain_data <- data.frame(label = roi_label, value = energy_roi_avg[1:400])
+    plot_surface(data = brain_data, color_type = 2, atlas = schaefer7_400, cmap = cmap,
+                 outpath = paste0(plot_path, "/Energy_", file_name, "_BrainMap"))
+  }, 
+  "schaefer200" = {
+    roi_label <- read.csv(paste0(root_path, "data/parcellation/schaefer200_region_labels.csv"))
+    brain_data <- data.frame(label = roi_label, value = energy_roi_avg[1:200])
+    plot_surface(data = brain_data, color_type = 2, atlas = schaefer7_200, cmap = cmap,
+                 outpath = paste0(plot_path, "/Energy_", file_name, "_BrainMap"))
+  }
+)
+```
+
+### ADHD
+plot ADHD control energy
+```{r plot_adhd_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_real <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_real_roi <- energy_real$ROI[adhd_0y_idx, ]
+energy_real_wholebrain <- energy_real$WholeBrain[adhd_0y_idx, ]
+
+file_name <- paste0("ABCD_", task_contrast, "_", atlas)
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+network_label <- atlas_label$Net_Label
+
+# Calculate network-average control energy (log-transformed)
+energy_roi_avg <- log(colMeans(energy_real_roi))
+plot_data_network <- data.frame(energy = energy_roi_avg, network = network_label)
+plot_data_network$network <- factor(plot_data_network$network, levels = 1:8, labels = network_names)
+
+# Boxplot: Network-level control energy distribution
+p_network <- ggplot(plot_data_network, aes(x = network, y = energy)) +
+  geom_boxplot(fill = network_colors, width = 0.7, outlier.size = 0.8) + 
+  geom_jitter(size = 0.8) +
+  labs(x = "", y = "Log(Control Energy)") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 16, colour = "black", angle = 32, hjust = 1), 
+        axis.text.y = element_text(size = 16, colour = "black"), 
+        axis.title = element_text(size = 16), 
+        aspect.ratio = 0.8)
+print(p_network)
+ggsave(paste0(plot_path, "/Energy_", task_contrast, "_net_boxplot_adhd.png"), plot = p_network, width = 12, height = 10, units = "cm")
+
+# Brain map: Regional control energy visualization
+switch(atlas, 
+  "schaefer400" = {
+    roi_label <- read.csv(paste0(root_path, "data/parcellation/schaefer400_region_labels.csv"))
+    brain_data <- data.frame(label = roi_label, value = energy_roi_avg[1:400])
+    plot_surface(data = brain_data, color_type = 2, atlas = schaefer7_400, cmap = cmap, 
+                 outpath = paste0(plot_path, "/Energy_", file_name, "_BrainMap_adhd"))
+  }, 
+  "schaefer200" = {
+    roi_label <- read.csv(paste0(root_path, "data/parcellation/schaefer200_region_labels.csv"))
+    brain_data <- data.frame(label = roi_label, value = energy_roi_avg[1:200])
+    plot_surface(data = brain_data, color_type = 2, atlas = schaefer7_200, cmap = cmap, 
+                 outpath = paste0(plot_path, "/Energy_", file_name, "_BrainMap_adhd"))
+  }
+)
+```
+
+## Null Model Analysis
+
+```{r define_null_energy_function}
+# Function to load null model energy data for a single iteration
+energy_summary_null <- function(working_dir, task_contrast, atlas, combat, iter, energy_norm) {
+  file_name <- paste0("ABCD_", task_contrast, "_", atlas, "_", iter)
+  atlas_label <- read.csv(paste0(working_dir, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+  network_label <- atlas_label$Net_Label
+  
+  # Load energy data
+  energy_file <- if (combat == "") {
+    paste0(working_dir, "data/", energy_norm, "/", file_name, ".csv")
+  } else {
+    paste0(working_dir, "data/", energy_norm, "/", file_name, "_", combat, ".csv")
+  }
+  energy_roi <- read.csv(energy_file)
+  colnames(energy_roi) <- atlas_label$ROI_Label
+  
+  # Calculate network-level energy
+  n_subjects <- nrow(energy_roi)
+  energy_network <- data.frame(matrix(NA, nrow = n_subjects, ncol = 8))
+  colnames(energy_network) <- network_names
+  for (i in 1:8) {
+    network_idx <- which(network_label == i)
+    energy_network[, i] <- rowMeans(energy_roi[, network_idx])
+  }
+  
+  # Calculate whole-brain energy
+  energy_wholebrain <- as.data.frame(rowMeans(energy_roi))
+  colnames(energy_wholebrain) <- "WholeBrain"
+  
+  return(list(ROI = energy_roi, NetAvg = energy_network, WholeBrain = energy_wholebrain))
+}
+```
+
+```{r load_null_energy}
+# Load null model energy across 101 iterations
+energy_norm_null <- "control_energy_null"
+energy_null_list <- vector("list", 101)
+
+for (i in 1:101) {
+  iter_name <- sprintf("iter%03d", i)
+  energy_null_list[[i]] <- energy_summary_null(working_dir = root_path, task_contrast = task_contrast, 
+                                               atlas = atlas, combat = combat_type, iter = iter_name, 
+                                               energy_norm = energy_norm_null)
+}
+
+save(energy_null_list, file = file.path(outpath, "energy_null.RData"))
+```
+
+```{r extract_null_wholebrain}
+load(file.path(outpath, "energy_null.RData"))
+
+# Extract median whole-brain energy across null iterations for TD subjects
+sub_test_info <- fread(paste0(behav_path, "sub_test_info.csv"))
+td_0y_idx_null <- which(sub_test_info$diagnosis == "td" & sub_test_info$eventname == "baseline_year_1_arm_1")
+
+energy_null_wholebrain <- bind_cols(lapply(energy_null_list, function(x) x$WholeBrain))
+energy_null_wholebrain_median <- apply(do.call(rbind, energy_null_wholebrain), 2, median)
+energy_null_wholebrain_td <- energy_null_wholebrain_median[td_0y_idx_null]
+```
+
+```{r compare_real_vs_null}
+# Compare real network energy to null model
+energy_comparison <- data.frame(real = energy_real_wholebrain, null = energy_null_wholebrain_td)
+
+# Paired t-test
+t.test(energy_comparison$real, energy_comparison$null, paired = TRUE)
+
+# Prepare data for plotting
+plot_data_comparison <- data.frame(
+  energy = c(log(energy_comparison$real), log(energy_comparison$null)),
+  network_type = rep(c("Real Network", "Null Network"), each = nrow(energy_comparison))
+)
+plot_data_comparison$network_type <- factor(plot_data_comparison$network_type, levels = c("Real Network", "Null Network"))
+```
+
+```{r plot_null_comparison}
+# Boxplot: Real vs Null network energy comparison
+p_null_comparison <- ggplot(plot_data_comparison, aes(x = network_type, y = energy, fill = network_type)) +
+  geom_boxplot(fill = c("#B22222", "gray70"), width = 0.7, alpha = 0.75, outlier.shape = NA) +
+  geom_jitter(size = 1.2, alpha = 0.8, shape = 16, position = position_jitter(0.2)) + 
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_x_discrete(labels = c("Empirical\nnetwork", "Null\nnetwork")) +
+  scale_y_continuous(limits = c(-2.83, -2.63), breaks = c(-2.8, -2.7), expand = c(0, 0)) +
+  labs(x = "", y = "Log(Control Energy)") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"), 
+        axis.title = element_text(size = 20), plot.title = element_text(size = 20, color = "black", hjust = 0.5), aspect.ratio = 1.3)
+print(p_null_comparison)
+ggsave(paste0(plot_path, "/Energy_", file_name, "_null.png"), plot = p_null_comparison, width = 10, height = 11, units = "cm", dpi = 1200)
+```

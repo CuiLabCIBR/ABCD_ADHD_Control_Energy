@@ -1,0 +1,520 @@
+---
+title: "ABCD_Participants_Imaging_Demographics_OK"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+# Diagnosis
+
+In this work, we focused on the attention-deficit/hyperactivity disorder (**adhd**) from the Adolescent Brain Cognitive Development (ABCD) Study. Specifically, the ADHD participants were mainly determined based on ([Norman et al., 2024](https://psychiatryonline.org/doi/10.1176/appi.ajp.20230026)):
+
+Met ADHD-present, partial remission or unspecified on the KSADS-COMP. Exclude ADHD-past-only.
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(data.table)
+})
+
+rm(list = ls())
+
+demo_path <- "D:/ABCD/abcd-data-release-5.1/core/"
+behav_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/data/sub_info/"
+
+# Helper Functions ----
+# Track exclusions at each step
+track_exclusions <- function(data, prev_counts, step_name) {
+  curr_0y <- sum(data$eventname == "baseline_year_1_arm_1")
+  curr_2y <- sum(data$eventname == "2_year_follow_up_y_arm_1")
+  
+  cat(sprintf("%s (baseline): exclude %d participants\n", 
+              step_name, prev_counts$n_0y - curr_0y))
+  cat(sprintf("%s (2-year follow-up): exclude %d participants\n", 
+              step_name, prev_counts$n_2y - curr_2y))
+  
+  list(n_0y = curr_0y, n_2y = curr_2y)
+}
+
+# Get current sample counts
+get_counts <- function(data) {
+  list(
+    n_0y = sum(data$eventname == "baseline_year_1_arm_1"),
+    n_2y = sum(data$eventname == "2_year_follow_up_y_arm_1")
+  )
+}
+```
+
+## Imporat KASDS data
+
+```{r ksads}
+mh_p_ksads <- fread(paste0(demo_path, "mental-health/mh_p_ksads_ss.csv"))
+mh_y_ksads <- fread(paste0(demo_path, "mental-health/mh_y_ksads_ss.csv"))
+
+mh_p_ksads <- mh_p_ksads %>% filter(eventname %in% c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"))
+mh_y_ksads <- mh_y_ksads %>% filter(eventname %in% c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"))
+```
+
+## ADHD diagnosis
+
+ADHD: present (ksads_14_853_p) or partial remission (ksads_14_855_p) or unspecified (ksads_14_856_p).
+
+```{r adhd}
+# Parent
+adhd_mh_p_ksads <- mh_p_ksads %>%
+  filter(ksads_14_853_p == 1 | ksads_14_855_p == 1 | ksads_14_856_p == 1) %>%
+  select(src_subject_id, eventname, ksads_14_853_p, ksads_14_855_p, ksads_14_856_p)
+
+# Get ADHD subjects at baseline (Year 0)
+sub_adhd_0y <- adhd_mh_p_ksads %>%
+  filter(eventname == "baseline_year_1_arm_1") %>% 
+  select(src_subject_id, eventname)
+
+# Load longitudinal tracking data to identify follow-up visits
+abcd_y_lt <- fread(paste0(demo_path, "abcd-general/abcd_y_lt.csv"))
+
+# Get 2-year follow-up data ONLY for subjects who were ADHD at baseline
+sub_adhd_2y <- abcd_y_lt %>% 
+  filter(src_subject_id %in% sub_adhd_0y$src_subject_id & eventname == "2_year_follow_up_y_arm_1") %>% 
+  select(src_subject_id, eventname)
+
+# Combine baseline and follow-up ADHD subjects
+sub_adhd <- bind_rows(sub_adhd_0y, sub_adhd_2y)
+sub_adhd$diagnosis <- "adhd"
+```
+
+## Typically developing children
+
+Typically developing (TD) children, without any diagnosis.
+
+```{r td}
+# Define function to select TD subjects for a given event and return with eventname
+select_td <- function(mh_p_data, mh_y_data, mh_p_dict, mh_y_dict, event_name) {
+  
+  # Filter for the given event
+  mh_p <- filter(mh_p_data, eventname == event_name)
+  mh_y <- filter(mh_y_data, eventname == event_name)
+  
+  # Get unique subjects for this event
+  sub_all <- unique(c(mh_p$src_subject_id, mh_y$src_subject_id))
+  
+  # Select diagnosis columns
+  td_p_ksads <- mh_p %>% select(one_of(mh_p_dict$var_name))
+  td_y_ksads <- mh_y %>% select(one_of(mh_y_dict$var_name))
+  
+  # Replace NAs with 0 and check for diagnoses
+  td_p_ksads[is.na(td_p_ksads)] <- 0
+  td_y_ksads[is.na(td_y_ksads)] <- 0
+  td_p_ksads <- as.data.frame(td_p_ksads == 1)
+  td_y_ksads <- as.data.frame(td_y_ksads == 1)
+  
+  # Identify subjects with diagnoses
+  sub_ksads_p <- mh_p$src_subject_id[rowSums(td_p_ksads) > 0]
+  sub_ksads_y <- mh_y$src_subject_id[rowSums(td_y_ksads) > 0]
+  
+  # Exclude all diagnosed subjects in ksads for this event
+  sub_ksads <- unique(c(sub_ksads_p, sub_ksads_y))
+  sub_td <- setdiff(sub_all, sub_ksads)
+  
+  # Combine TD subjects with eventname
+  td_subjects <- data.frame(src_subject_id = sub_td, eventname = event_name)
+  
+  return(td_subjects)
+}
+
+# Load the diagnosis dictionaries
+mh_p_ksads_dict <- fread(paste0(behav_path, "diagnosis/mh_p_ksads_ss-ABCD-Data-Dictionary.csv")) %>%
+  filter(table_name_nda == "abcd_ksad01", grepl("Diagnosis - ", var_label))
+mh_y_ksads_dict <- fread(paste0(behav_path, "diagnosis/mh_y_ksads_ss-ABCD-Data-Dictionary.csv")) %>%
+  filter(table_name_nda == "abcd_ksad501", grepl("Diagnosis - ", var_label))
+
+# Select TD subjects for baseline and follow-up, with eventname
+sub_td_0y <- select_td(mh_p_ksads, mh_y_ksads, mh_p_ksads_dict, mh_y_ksads_dict, "baseline_year_1_arm_1")
+sub_td_2y <- select_td(mh_p_ksads, mh_y_ksads, mh_p_ksads_dict, mh_y_ksads_dict, "2_year_follow_up_y_arm_1")
+
+# Exclude any subjects who are in the ADHD group
+sub_td_0y <- sub_td_0y %>% 
+  filter(! src_subject_id %in% sub_adhd$src_subject_id)
+sub_td_2y <- sub_td_2y %>% 
+  filter(! src_subject_id %in% sub_adhd$src_subject_id)
+
+# Combine baseline and follow-up TD subjects
+sub_td <- bind_rows(sub_td_0y, sub_td_2y)
+sub_td$diagnosis <- "td"
+```
+
+## Combine TD and ADHD
+
+```{r combine_td_adhd}
+sub_info <- bind_rows(sub_td, sub_adhd)
+sub_info <- merge(sub_info, mh_p_ksads[, c("src_subject_id", "eventname", "ksads_14_853_p", "ksads_14_855_p", "ksads_14_856_p")], 
+                  by = c("src_subject_id", "eventname"), all.x = TRUE)
+
+sub_info <- sub_info %>% 
+  rename(
+    ksads_adhd_present = ksads_14_853_p,
+    ksads_adhd_remission = ksads_14_855_p,
+    ksads_adhd_unspecified = ksads_14_856_p
+  )
+
+sub_info <- sub_info %>%
+  mutate(
+    ksads_adhd = case_when(
+      ksads_adhd_present == 1 ~ "present",
+      ksads_adhd_remission == 1 ~ "remission",
+      ksads_adhd_unspecified == 1 ~ "unspecified",
+      TRUE ~ NA_character_ # Handle cases where none of the conditions are met
+    )
+  )
+
+sub_info$eventname <- factor(sub_info$eventname, 
+                             levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"))
+
+N1 <- dim(sub_info)[1]
+N1_0y <- dim(filter(sub_info, sub_info$eventname == "baseline_year_1_arm_1"))[1]
+N1_2y <- dim(filter(sub_info, sub_info$eventname == "2_year_follow_up_y_arm_1"))[1]
+```
+
+::: {.callout-note icon="false"}
+`r N1` visits enrolled.
+
+`r knitr::kable(table(sub_info[, c("eventname", "diagnosis")]), align = 'l') %>% kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, position = "left")`
+:::
+
+# Imaging
+
+## QC
+
+Include only scans that passed QC for BOTH:
+
+-   T1-weighted structural imaging (imgincl_t1w_include == 1)
+-   Diffusion MRI (imgincl_dmri_include == 1)
+
+```{r QC}
+counts <- get_counts(sub_info)
+
+mri_y_qc_incl <- fread(paste0(demo_path, "imaging/mri_y_qc_incl.csv"))
+
+sub_qc_incl <- mri_y_qc_incl %>% 
+  filter(eventname %in% c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")) %>%
+  filter(imgincl_t1w_include == 1 & imgincl_dmri_include == 1) %>% 
+  select(src_subject_id, eventname)
+
+sub_info <- merge(sub_info, sub_qc_incl, by = c("src_subject_id", "eventname"))
+counts <- track_exclusions(sub_info, counts, "Not meet official quality control")
+```
+
+## Preprocessing
+
+-   Finished DWI data preprocessing and structural connectome reconstruction.
+-   No isolated brain regions in SC network.
+
+```{r qsiprep}
+counts <- get_counts(sub_info)
+
+# load subject list after finish qsiprep preprocessing
+sub_dwi_0y <- fread(paste0(behav_path, "sub_dwi_strength_fd_baselineYear1Arm1_qc.csv"))
+sub_dwi_0y$src_subject_id <- sub_dwi_0y$sub_id  %>% 
+  gsub("_ses-baselineYear1Arm1", "", .) %>% 
+  gsub("sub-NDAR", "NDAR_", .)
+sub_dwi_0y$eventname <- "baseline_year_1_arm_1"
+
+sub_dwi_2y <- fread(paste0(behav_path, "sub_dwi_strength_fd_2YearFollowUpYArm1_qc.csv"))
+sub_dwi_2y$src_subject_id <- sub_dwi_2y$sub_id  %>% 
+  gsub("_ses-2YearFollowUpYArm1", "", .) %>% 
+  gsub("sub-NDAR", "NDAR_", .)
+sub_dwi_2y$eventname <- "2_year_follow_up_y_arm_1"
+
+sub_dwi <- bind_rows(sub_dwi_0y, sub_dwi_2y)
+
+# interaction
+sub_info <- merge(sub_info, sub_dwi, by = c("src_subject_id", "eventname"))
+counts <- track_exclusions(sub_info, counts, "Failed preprocessing and reconstruction, with isolated regions")
+```
+
+## HeadMotion
+
+Head motion: Less than mean + 3\*SD
+
+```{r headmotion}
+counts <- get_counts(sub_info)
+
+## exclude FD > mean + 3*SD
+mean_fd <- sub_info$mean_fd
+fd_thr <- mean(mean_fd) + 3*sd(mean_fd)
+
+sub_info <- filter(sub_info, mean_fd < fd_thr)
+counts <- track_exclusions(sub_info, counts, "Excessive head motion: FD > mean + 3×SD")
+
+N2 <- dim(sub_info)[1]
+N2_0y <- dim(filter(sub_info, sub_info$eventname == "baseline_year_1_arm_1"))[1]
+N2_2y <- dim(filter(sub_info, sub_info$eventname == "2_year_follow_up_y_arm_1"))[1]
+```
+
+::: {.callout-note icon="false"}
+`r N2` scans successfully completed SC network reconstruction. A total of `r N1 - N2` scans were excluded (`r N1_0y - N2_0y` at baseline, `r N1_2y - N2_2y` at 2-year follow-up).
+
+`r knitr::kable(table(sub_info[, c("eventname", "diagnosis")]), align = 'l') %>% kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, position = "left")`
+:::
+
+# Demographics
+
+## Age
+
+Exclude participants with invalid Age (NA).
+
+```{r Age}
+counts <- get_counts(sub_info)
+
+abcd_y_lt <- fread(paste0(demo_path, "abcd-general/abcd_y_lt.csv"))
+# Month to Year
+abcd_y_lt$interview_age <- abcd_y_lt$interview_age/12
+
+sub_info <- merge(sub_info, abcd_y_lt[, c("src_subject_id", "eventname", "interview_age")], 
+                  by = c("src_subject_id", "eventname"))
+sub_info <- filter(sub_info, !is.na(interview_age))
+sub_info <- rename(sub_info, age = interview_age)
+
+counts <- track_exclusions(sub_info, counts, "Invalid age")
+```
+
+## Sex
+
+Exclude participants with invalid Sex (3, 4, 999).
+
+1 = Male; 2 = Female; 3 = Intersex-Male; 4 = Intersex-Female; 999 = Don"t know.
+
+```{r Sex}
+counts <- get_counts(sub_info)
+
+abcd_p_demo <- fread(paste0(demo_path, "abcd-general/abcd_p_demo.csv"))
+sub_info <- sub_info %>% left_join(select(abcd_p_demo, c("src_subject_id", "demo_sex_v2")), 
+                                   by = "src_subject_id", multiple="first")
+sub_info <- filter(sub_info, demo_sex_v2 == 1 | demo_sex_v2 == 2)
+
+# Convert from numbers to characters
+sub_info <- sub_info %>%
+  mutate(sex = case_when(
+    demo_sex_v2 == 1 ~ "Male", 
+    demo_sex_v2 == 2 ~ "Female", 
+    TRUE ~ NA_character_
+  ))
+
+sub_info <- sub_info %>% select(-demo_sex_v2)
+counts <- track_exclusions(sub_info, counts, "Invalid sex")
+```
+
+## Race/Ethnicity
+
+Exclude participants with invalid Race/Ethnicity (NA).
+
+1 = White; 2 = Black; 3 = Hispanic; 4 = Asian; 5 = Other.
+
+```{r Race}
+counts <- get_counts(sub_info)
+
+abcd_p_demo <- fread(paste0(demo_path, "abcd-general/abcd_p_demo.csv"))
+sub_info <- sub_info %>% left_join(select(abcd_p_demo, c("src_subject_id", "race_ethnicity")), 
+                                   by = "src_subject_id", multiple = "first")
+
+sub_info <- sub_info %>% 
+  filter(!is.na(race_ethnicity))
+
+# Convert from numbers to characters
+sub_info <- sub_info %>%
+  mutate(race = case_when(
+    race_ethnicity == 1 ~ "White", 
+    race_ethnicity == 2 ~ "Black", 
+    race_ethnicity == 3 ~ "Hispanic", 
+    race_ethnicity == 4 ~ "Asian", 
+    race_ethnicity == 5 ~ "Other", 
+    TRUE ~ NA_character_
+  ))
+
+sub_info <- sub_info %>% select(-race_ethnicity)
+counts <- track_exclusions(sub_info, counts, "Invalid race/ethnicity")
+```
+
+## Handedness
+
+Exclude participants with invalid Handedness (NA).
+
+1=right handed; 2=left handed; 3=mixed handed.
+
+```{r Handedness}
+counts <- get_counts(sub_info)
+
+nc_y_ehis <- fread(paste0(demo_path, "neurocognition/nc_y_ehis.csv"))
+sub_info <- sub_info %>% left_join(select(nc_y_ehis, c("src_subject_id", "ehi_y_ss_scoreb")), 
+                                   by = "src_subject_id", multiple = "first")
+sub_info <-  sub_info %>% 
+  filter(!is.na(ehi_y_ss_scoreb))
+
+# Convert from numbers to characters
+sub_info <- sub_info %>%
+  mutate(handedness = case_when(
+    ehi_y_ss_scoreb == 1 ~ "right", 
+    ehi_y_ss_scoreb == 2 ~ "left", 
+    ehi_y_ss_scoreb == 3 ~ "mixed", 
+    TRUE ~ NA_character_
+  ))
+
+sub_info <- sub_info %>% select(-ehi_y_ss_scoreb)
+counts <- track_exclusions(sub_info, counts, "Invalid handedness")
+```
+
+## Site/Scanner
+
+Exclude participants with invalid Site (NA).
+
+```{r site}
+counts <- get_counts(sub_info)
+
+# site
+sub_info <- merge(sub_info, abcd_y_lt[, c("src_subject_id", "eventname", "site_id_l")], 
+                  by = c("src_subject_id", "eventname"))
+
+sub_info <- sub_info %>% rename(site_id = site_id_l)
+sub_info$site_id2 <- gsub("site0", "site", sub_info$site_id)
+
+# Inclusion
+sub_info <- filter(sub_info, !is.na(site_id))
+counts <- track_exclusions(sub_info, counts, "Invalid site/scanner")
+```
+
+## Count
+
+For the model to accurately parse variance attributable to age, sex and site, sufficient observations are required for any given combination of these variables. We therefore excluded data cells containing less than ten HCs for a particular sex at a given site. If this exclusion procedure resulted in less than ten cases in total from any given site, the entire site was excluded ([Segal et al., 2023](https://www.nature.com/articles/s41593-023-01404-6)):
+
+```{r count}
+counts <- get_counts(sub_info)
+
+table(filter(sub_info, diagnosis == "td") %>% select(site_id, sex))
+# Inclusion
+sub_info <- filter(sub_info, site_id != "site22")
+counts <- track_exclusions(sub_info, counts, "Sites with less than ten TDCs for a particular sex")
+```
+
+## TBV
+
+Total brain volume (TBV) is included as a covariate.
+
+```{r tbv}
+counts <- get_counts(sub_info)
+
+# TBV
+mri_y_smr_vol_aseg <- fread(paste0(demo_path, "imaging/mri_y_smr_vol_aseg.csv"))
+
+sub_info <- merge(sub_info, mri_y_smr_vol_aseg[, c("src_subject_id", "eventname", "smri_vol_scs_wholeb")], 
+                  by = c("src_subject_id", "eventname"))
+
+sub_info <- sub_info %>% 
+  rename(
+    network_strength_schaefer400 = schaefer400,
+    network_strength_schaefer200 = schaefer200,
+    TBV = smri_vol_scs_wholeb
+  )
+
+sub_info$TBV <- sub_info$TBV / 1000 # mm^3 to mL
+
+sub_info <- filter(sub_info, !is.na(TBV))
+counts <- track_exclusions(sub_info, counts, "Invalid TBV")
+```
+
+# Psychopathology
+
+## Child Behavior Checklist (CBCL)
+
+The **Child Behavior Checklist** (**CBCL**) is a widely used caregiver report form identifying problem behavior in children. Here, we used the **t scores**.
+
+```{r cbcl}
+mh_p_cbcl <- fread(paste0(demo_path, "mental-health/mh_p_cbcl.csv"))
+mh_p_cbcl <- as.data.frame(mh_p_cbcl)
+
+mh_p_cbcl <- mh_p_cbcl %>%
+  select(src_subject_id, eventname, matches("^cbcl_scr_syn_.*_t$"))
+# mh_p_cbcl <- mh_p_cbcl %>% 
+#   select(c("src_subject_id", "eventname", ends_with("_t")))
+
+CBCL_items <- mh_p_cbcl %>% 
+  select(ends_with("_t")) %>% 
+  select(-starts_with("cbcl_scr_07")) %>% 
+  colnames()
+
+sub_info <- merge(sub_info, mh_p_cbcl[, c("src_subject_id", "eventname", CBCL_items)], 
+                  by = c("src_subject_id", "eventname"), all.x = TRUE)
+```
+
+# Save
+
+Filter dataset to include:
+
+-   All TD subjects (any timepoint)
+-   ADHD subjects at baseline
+-   ADHD subjects at 2-year follow-up ONLY if they also have baseline data
+
+```{r save_behav}
+# Exclude ADHD only have 2-year data
+adhd_baseline_ids <- sub_info %>%
+  filter(diagnosis == "adhd", eventname == "baseline_year_1_arm_1") %>%
+  pull(src_subject_id) %>%
+  unique()
+
+sub_info <- sub_info %>%
+  filter(
+    diagnosis == "td" |
+    (diagnosis == "adhd" & eventname == "baseline_year_1_arm_1") |
+    (diagnosis == "adhd" & eventname == "2_year_follow_up_y_arm_1" & src_subject_id %in% adhd_baseline_ids)
+  )
+
+# sort subjects based on src_subject_id and eventname
+sub_info <- sub_info %>%
+  arrange(src_subject_id, factor(eventname, levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")))
+
+sub_info <- sub_info %>%
+  mutate(eventname2 = case_when(
+    eventname == "baseline_year_1_arm_1" ~ "baselineYear1Arm1", 
+    eventname == "2_year_follow_up_y_arm_1" ~ "2YearFollowUpYArm1", 
+    TRUE ~ NA_character_
+  ))
+
+sub_info %>%
+  filter(diagnosis %in% c("td", "adhd")) %>% 
+  group_by(diagnosis) %>%
+  summarise(
+    min_age = min(age, na.rm = TRUE),
+    max_age = max(age, na.rm = TRUE)
+  )
+
+fwrite(sub_info, paste0(behav_path, "sub_demo_info.csv"), row.names = FALSE)
+
+N3 <- dim(sub_info)[1]
+N3_0y <- dim(filter(sub_info, sub_info$eventname == "baseline_year_1_arm_1"))[1]
+N3_2y <- dim(filter(sub_info, sub_info$eventname == "2_year_follow_up_y_arm_1"))[1]
+```
+
+::: {.callout-note icon="false"}
+`r N3` scans include. A total of `r N2 - N3` scans were excluded (`r N2_0y - N3_0y` at baseline, `r N2_2y - N3_2y` at 2-year follow-up).
+
+`r knitr::kable(table(sub_info[, c("eventname", "diagnosis")]), align = 'l') %>% kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, position = "left")`
+:::

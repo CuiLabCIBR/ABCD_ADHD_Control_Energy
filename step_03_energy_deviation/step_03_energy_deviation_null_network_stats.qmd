@@ -1,0 +1,303 @@
+---
+title: "Null Network Deviation Analysis"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Overview
+
+This analysis examines energy deviation differences between ADHD biotypes and typically developing (TD) controls using brain network control energy metrics. We compare real data against null (randomized) distributions to assess the robustness of observed effects.
+
+## Setup
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(psych)
+  library(effectsize)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(SNFtool)
+  library(data.table)
+  library(scales)
+  library(RColorBrewer)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- file.path(root_path, "data/sub_info")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+
+# Define color palette
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+```
+
+## Real Data Analysis
+
+### Load Real Data
+
+```{r load_real_data}
+# Load energy deviation data
+load(file.path(outpath, "energy_deviation.RData"))
+
+# Extract baseline year indices for each biotype
+adhd1_0y_idx <- which(sub_test_info$biotype == "biotype1" & sub_test_info$eventname == "baseline_year_1_arm_1")
+adhd2_0y_idx <- which(sub_test_info$biotype == "biotype2" & sub_test_info$eventname == "baseline_year_1_arm_1")
+
+# Extract subject IDs
+adhd1_0y_id <- sub_test_info$src_subject_id[adhd1_0y_idx]
+adhd2_0y_id <- sub_test_info$src_subject_id[adhd2_0y_idx]
+
+# Load ADHD-TD matched pairs
+pair_info <- fread(file.path(behav_path, "adhd_td_pair_test.csv"), na.strings = c("", "NA"))
+
+# Find matched TD subjects for each biotype
+td1_0y_id <- pair_info$td_id[pair_info$adhd_id %in% adhd1_0y_id]
+td2_0y_id <- pair_info$td_id[pair_info$adhd_id %in% adhd2_0y_id]
+
+# Get indices of matched TD subjects
+td1_0y_idx <- which(sub_test_info$src_subject_id %in% td1_0y_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+td2_0y_idx <- which(sub_test_info$src_subject_id %in% td2_0y_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+```
+
+### Extract Real W-scores
+
+```{r extract_real_wscores}
+# Extract W-scores for each group
+W_scores_td1_0y_wholebrain <- W_scores_wholebrain[td1_0y_idx]
+W_scores_td2_0y_wholebrain <- W_scores_wholebrain[td2_0y_idx]
+W_scores_adhd1_0y_wholebrain <- W_scores_wholebrain[adhd1_0y_idx]
+W_scores_adhd2_0y_wholebrain <- W_scores_wholebrain[adhd2_0y_idx]
+
+# Calculate Cohen's d for real data
+cohens_d_biotype1 <- cohens_d(W_scores_adhd1_0y_wholebrain, W_scores_td1_0y_wholebrain)$Cohens_d
+cohens_d_biotype2 <- cohens_d(W_scores_adhd2_0y_wholebrain, W_scores_td2_0y_wholebrain)$Cohens_d
+```
+
+## Null Model Analysis
+
+### Load Null Data
+
+```{r load_null_data}
+# Load null distribution data
+load(file.path(outpath, "energy_deviation_null.RData"))
+
+# Extract indices for null data
+td_0y_idx_null <- which(sub_test_info$diagnosis == "td" & sub_test_info$eventname == "baseline_year_1_arm_1")
+adhd_0y_idx_null <- which(sub_test_info$diagnosis == "adhd" & sub_test_info$eventname == "baseline_year_1_arm_1")
+adhd1_0y_idx_null <- which(sub_test_info$src_subject_id %in% adhd1_0y_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+adhd2_0y_idx_null <- which(sub_test_info$src_subject_id %in% adhd2_0y_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+td1_0y_idx_null <- which(sub_test_info$src_subject_id %in% td1_0y_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+td2_0y_idx_null <- which(sub_test_info$src_subject_id %in% td2_0y_id & sub_test_info$eventname == "baseline_year_1_arm_1")
+
+# Extract null W-scores for each group
+W_scores_td_0y_null_wholebrain <- lapply(W_scores_null_wholebrain, `[`, td_0y_idx_null)
+W_scores_adhd_0y_null_wholebrain <- lapply(W_scores_null_wholebrain, `[`, adhd_0y_idx_null)
+W_scores_td1_0y_null_wholebrain <- lapply(W_scores_null_wholebrain, `[`, td1_0y_idx_null)
+W_scores_td2_0y_null_wholebrain <- lapply(W_scores_null_wholebrain, `[`, td2_0y_idx_null)
+W_scores_adhd1_0y_null_wholebrain <- lapply(W_scores_null_wholebrain, `[`, adhd1_0y_idx_null)
+W_scores_adhd2_0y_null_wholebrain <- lapply(W_scores_null_wholebrain, `[`, adhd2_0y_idx_null)
+```
+
+
+## Null Distribution Effect Sizes
+
+### Calculate Cohen's d for Each Iteration
+
+```{r calculate_null_cohens_d}
+# Compute Cohen's d for each of 101 null iterations
+cohens_d_adhd_null <- map_dbl(1:101, ~ cohens_d(W_scores_adhd_0y_null_wholebrain[[.x]], W_scores_td_0y_null_wholebrain[[.x]])$Cohens_d)
+cohens_d_biotype1_null <- map_dbl(1:101, ~ cohens_d(W_scores_adhd1_0y_null_wholebrain[[.x]], W_scores_td1_0y_null_wholebrain[[.x]])$Cohens_d)
+cohens_d_biotype2_null <- map_dbl(1:101, ~ cohens_d(W_scores_adhd2_0y_null_wholebrain[[.x]], W_scores_td2_0y_null_wholebrain[[.x]])$Cohens_d)
+```
+
+
+## Null Distribution Visualization
+
+### Biotype 1: Real vs Null Distribution
+
+```{r plot_biotype1_null}
+# Create histogram of null distribution with real value
+cohens_d_df <- tibble(cohens_d_null = cohens_d_biotype1_null)
+median_value <- median(cohens_d_df$cohens_d_null, na.rm = TRUE)
+
+fig1 <- ggplot(cohens_d_df, aes(x = cohens_d_null)) +
+  geom_histogram(aes(y = after_stat(count)), bins = 40, fill = "gray70", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = cohens_d_biotype1), color = "#E00000", linewidth = 1) +
+  annotate("text", x = cohens_d_biotype1, y = 16, label = paste0("Empirical = ", sprintf("%.2f", cohens_d_biotype1)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +  
+  geom_vline(xintercept = median_value, color = "gray50", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = median_value, y = 16, label = paste0("Median = ", sprintf("%.2f", median_value)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(limits = c(-0.65, 0.18), breaks = seq(-0.6, 0, 0.2)) +
+  labs(x = "Cohen's d", y = "Frequency") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    plot.title = element_text(hjust = 0.5),
+    aspect.ratio = 0.8
+  )
+
+print(fig1)
+ggsave(file.path(outpath, "biotype1_wholebrain_null.png"), plot = fig1, width = 12, height = 10, units = "cm", dpi = 1200)
+```
+
+The red line indicates the observed Cohen's d from real data, compared against the null distribution (gray histogram).
+
+### Biotype 2: Real vs Null Distribution
+
+```{r plot_biotype2_null}
+# Create histogram of null distribution with real value
+cohens_d_df <- tibble(cohens_d_null = cohens_d_biotype2_null)
+median_value <- median(cohens_d_df$cohens_d_null, na.rm = TRUE)
+
+fig2 <- ggplot(cohens_d_df, aes(x = cohens_d_null)) +
+  geom_histogram(aes(y = after_stat(count)), bins = 40, fill = "gray70", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = cohens_d_biotype2), color = "#E00000", linewidth = 1) +
+  annotate("text", x = cohens_d_biotype2, y = 14, label = paste0("Empirical = ", sprintf("%.2f", cohens_d_biotype2)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +  
+  geom_vline(xintercept = median_value, color = "gray50", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = median_value, y = 14, label = paste0("Median = ", sprintf("%.2f", median_value)),
+           color = "black", angle = 90, vjust = -0.5, size = 6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(limits = c(-0.23, 0.63), breaks = seq(-0.2, 0.6, 0.2)) +
+  labs(x = "Cohen's d", y = "Frequency") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    plot.title = element_text(hjust = 0.5),
+    aspect.ratio = 0.8
+  )
+
+print(fig2)
+ggsave(file.path(outpath, "biotype2_wholebrain_null.png"), plot = fig2, width = 12, height = 10, units = "cm", dpi = 1200)
+```
+
+### Calculate Null Medians
+
+```{r calculate_null_medians}
+# Calculate median values across null iterations
+# biotype1
+cohens_d_biotype1 <- tibble(cohens_d_null = cohens_d_biotype1_null)
+cohens_d_biotype1_median_value <- median(cohens_d_biotype1$cohens_d_null, na.rm = TRUE)
+cohens_d_biotype1_median_idx <- which(cohens_d_biotype1$cohens_d_null == cohens_d_biotype1_median_value)
+
+adhd1_0y_null_wholebrain_median <- W_scores_adhd1_0y_null_wholebrain[[cohens_d_biotype1_median_idx]]
+td1_0y_null_wholebrain_median <- W_scores_td1_0y_null_wholebrain[[cohens_d_biotype1_median_idx]]
+
+cohens_d_biotype1_null_median <- cohens_d(adhd1_0y_null_wholebrain_median, td1_0y_null_wholebrain_median)$Cohens_d
+print(cohens_d_biotype1_null_median)
+
+# biotype2
+cohens_d_biotype2 <- tibble(cohens_d_null = cohens_d_biotype2_null)
+cohens_d_biotype2_median_value <- median(cohens_d_biotype2$cohens_d_null, na.rm = TRUE)
+cohens_d_biotype2_median_idx <- which(cohens_d_biotype2$cohens_d_null == cohens_d_biotype2_median_value)
+
+adhd2_0y_null_wholebrain_median <- W_scores_adhd2_0y_null_wholebrain[[cohens_d_biotype2_median_idx]]
+td2_0y_null_wholebrain_median <- W_scores_td2_0y_null_wholebrain[[cohens_d_biotype2_median_idx]]
+
+cohens_d_biotype2_null_median <- cohens_d(adhd2_0y_null_wholebrain_median, td2_0y_null_wholebrain_median)$Cohens_d
+print(cohens_d_biotype2_null_median)
+
+# Perform t-tests on median values
+t_test_biotype1 <- t.test(adhd1_0y_null_wholebrain_median, td1_0y_null_wholebrain_median)
+t_test_biotype2 <- t.test(adhd2_0y_null_wholebrain_median, td2_0y_null_wholebrain_median)
+print(t_test_biotype1)
+print(t_test_biotype2)
+```
+
+## Visualization: Median Comparisons
+
+### Biotype 1 vs TD (Median Null)
+
+```{r plot_biotype1_median}
+# Prepare data for visualization
+n_td1_0y <- length(td1_0y_null_wholebrain_median)
+n_adhd1_0y <- length(adhd1_0y_null_wholebrain_median)
+group <- factor(c(rep("td", n_td1_0y), rep("adhd", n_adhd1_0y)), levels = c("adhd", "td"))
+plot_data <- data.frame(energy_deviation = c(td1_0y_null_wholebrain_median, adhd1_0y_null_wholebrain_median), group = group)
+
+# Create boxplot
+p1 <- ggplot(plot_data, aes(x = group, y = energy_deviation, fill = group)) + 
+  geom_boxplot(alpha = 0.4, outlier.shape = NA) +  
+  geom_jitter(shape = 16, position = position_jitter(0.2)) + 
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c(color_palette[1], "#E0E0E0")) + 
+  scale_x_discrete(labels = c("ADHD-1", "TDC-1")) +
+  scale_y_continuous(limits = c(1.5, 12), breaks = seq(2, 12, by = 3)) +
+  # labs(title = paste0("Cohen's d = ", sprintf("%.2f", cohens_d_biotype1_null_median)), y = "Energy Deviation", x = "") +
+  labs(y = "Energy Deviation", x = "") +
+  theme_classic() + 
+  theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"), 
+        axis.title = element_text(size = 20), plot.title = element_text(size = 20, color = "black", hjust = 0.5), aspect.ratio = 1.4)
+print(p1)
+ggsave(file.path(outpath, "biotype1_wholebrain_median_null.png"), plot = p1, width = 10, height = 11, units = "cm", dpi = 1200)
+```
+
+### Biotype 2 vs TD (Median Null)
+
+```{r plot_biotype2_median}
+# Prepare data for visualization
+n_td2_0y <- length(td2_0y_null_wholebrain_median)
+n_adhd2_0y <- length(adhd2_0y_null_wholebrain_median)
+group <- factor(c(rep("td", n_td2_0y), rep("adhd", n_adhd2_0y)), levels = c("adhd", "td"))
+plot_data <- data.frame(energy_deviation = c(td2_0y_null_wholebrain_median, adhd2_0y_null_wholebrain_median), group = group)
+
+# Create boxplot
+p2 <- ggplot(plot_data, aes(x = group, y = energy_deviation, fill = group)) + 
+  geom_boxplot(alpha = 0.4, outlier.shape = NA) + 
+  geom_jitter(shape = 16, position = position_jitter(0.2)) + 
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c(color_palette[2], "#E0E0E0")) + 
+  scale_x_discrete(labels = c("ADHD-2", "TDC-2")) +
+  scale_y_continuous(limits = c(1.5, 12), breaks = seq(2, 12, by = 3)) +
+  # labs(title = paste0("Cohen's d = ", sprintf("%.2f", cohens_d_biotype1_null_median)), y = "Energy Deviation", x = "") +
+  labs(y = "Energy Deviation", x = "") +
+  theme_classic() + 
+  theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"), 
+        axis.title = element_text(size = 20), plot.title = element_text(size = 20, color = "black", hjust = 0.5), aspect.ratio = 1.4)
+print(p2)
+ggsave(file.path(outpath, "biotype2_wholebrain_median_null.png"), plot = p2, width = 10, height = 11, units = "cm", dpi = 1200)
+```

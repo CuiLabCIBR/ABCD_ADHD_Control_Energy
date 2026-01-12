@@ -1,0 +1,749 @@
+---
+title: "ADHD Energy Deviation Biotype"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggradar)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(SNFtool)
+  library(data.table)
+  library(scales)
+  library(knitr)
+  library(kableExtra)
+  library(RColorBrewer)
+  library(compareGroups)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface_thr.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+
+# Define color palettes
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+network_names <- c("VS", "SM", "DA", "VA", "LM", "FP", "DM", "SC")
+```
+
+## Data Preparation
+
+```{r load_subject_info}
+# Load demographic information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+# Define variable groups
+demo_var <- c("src_subject_id", "eventname", "age", "sex", "race", "handedness", 
+              "diagnosis", "usage")
+mri_var <- c("mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_var <- sub_demo_info %>% 
+  select(starts_with("cbcl")) %>%
+  colnames()
+
+# Select relevant variables and convert to factors
+sub_demo_info <- sub_demo_info %>% select(all_of(c(demo_var, mri_var, behav_var)))
+factor_var <- c("sex", "race", "handedness", "diagnosis")
+sub_demo_info[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+# Remove subjects with missing usage information
+# sub_demo_info$usage[is.na(sub_demo_info$usage)] <- "train"
+idx_nonNA <- which(!is.na(sub_demo_info$usage))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+# # Split into train and test sets
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+```
+
+## Data Analysis
+
+### Energy Calculation
+
+```{r calculate_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_data <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_roi <- energy_data$ROI[idx_nonNA, ]
+energy_network <- energy_data$NetAvg[idx_nonNA, ]
+energy_wholebrain <- as.data.frame(energy_data$WholeBrain[idx_nonNA, ])
+colnames(energy_wholebrain) <- "WholeBrain"
+
+roi_num <- ncol(energy_roi)
+cortex_num <- roi_num - 52  # 52 subcortical ROIs
+```
+
+## Energy Deviation
+
+```{r calculate_w_scores}
+# Define covariates for W-score calculation
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_data <- sub_demo_info[, ..covariates]
+
+# Define indices for train, test, and baseline groups
+train_idx <- which(sub_demo_info$usage == "train")
+test_idx <- which(sub_demo_info$usage == "test")
+adhd_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "adhd")
+td_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "td")
+
+# Calculate W-scores at whole-brain level
+lm_data <- cbind(energy_wholebrain, behav_data)
+W_scores_wholebrain <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_wholebrain <- W_scores_wholebrain[adhd_0y_idx, ]
+td_0y_deviation_wholebrain <- W_scores_wholebrain[td_0y_idx, ]
+
+# Calculate W-scores at network level
+lm_data <- cbind(energy_network, behav_data)
+W_scores_network <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_network <- W_scores_network[adhd_0y_idx, ]
+td_0y_deviation_network <- W_scores_network[td_0y_idx, ]
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+W_scores_roi <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_roi <- W_scores_roi[adhd_0y_idx, ]
+td_0y_deviation_roi <- W_scores_roi[td_0y_idx, ]
+```
+
+### Extreme Deviation
+
+```{r identify_extreme_deviations}
+# Define threshold for extreme deviation
+W_thr <- 2.6
+
+# Calculate extreme deviation metrics for ADHD
+adhd_deviation <- abs(adhd_0y_deviation_roi) > W_thr
+adhd_deviation_pct <- colMeans(adhd_deviation) * 100
+adhd_pos_deviation <- adhd_0y_deviation_roi > W_thr
+adhd_pos_deviation_pct <- colMeans(adhd_pos_deviation) * 100
+adhd_neg_deviation <- adhd_0y_deviation_roi < -W_thr
+adhd_neg_deviation_pct <- colMeans(adhd_neg_deviation) * 100
+adhd_counts <- rowSums(adhd_deviation)
+adhd_pos_counts <- rowSums(adhd_pos_deviation)
+adhd_neg_counts <- rowSums(adhd_neg_deviation)
+
+# Calculate extreme deviation metrics for TD
+td_deviation <- abs(td_0y_deviation_roi) > W_thr
+td_pos_deviation <- td_0y_deviation_roi > W_thr
+td_pos_deviation_pct <- colMeans(td_pos_deviation) * 100
+td_neg_deviation <- td_0y_deviation_roi < -W_thr
+td_neg_deviation_pct <- colMeans(td_neg_deviation) * 100
+td_counts <- rowSums(td_deviation)
+td_pos_counts <- rowSums(td_pos_deviation)
+td_neg_counts <- rowSums(td_neg_deviation)
+```
+
+
+```{r plot_deviation_histogram}
+# Distribution of extreme deviations across thresholds
+thresholds <- c(1, 5, 10, 15, 20)
+pos_percent <- sapply(thresholds, function(t) mean(adhd_pos_counts > t) * 100)
+neg_percent <- sapply(thresholds, function(t) mean(adhd_neg_counts > t) * 100)
+
+plot_data <- data.frame(
+  Threshold = factor(rep(paste0(">", thresholds), times = 2), levels = paste0(">", thresholds)),
+  Deviation = factor(rep(c("Positive", "Negative"), each = length(thresholds)), levels = c("Positive", "Negative")),
+  Percentage = c(pos_percent, neg_percent)
+)
+
+p <- ggplot(plot_data, aes(x = Threshold, y = Percentage, fill = Deviation)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c("Positive" = "salmon", "Negative" = "skyblue")) +
+  labs(x = "Number of extreme deviations", y = "Percentage of subjects (%)") +
+  # theme_classic() +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text = element_text(size = 14, color = "black"),
+        axis.title = element_text(size = 14), plot.title = element_text(size = 14, color = "black", hjust = 0.5), aspect.ratio = 1)
+print(p)
+ggsave(paste0(outpath, "/plot_deviation_hist.png"), bg = "transparent", plot = p, width = 8, height = 8, units = "cm", dpi = 1200)
+```
+
+```{r plot_deviation_brainmaps}
+# Load atlas labels
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_region_labels.csv"))
+schaefer_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+
+# Positive deviation brain map
+cmap_r <- rev(c("#A63726", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7"))
+print(max(adhd_pos_deviation_pct))
+brain_plot_data <- data.frame(label = atlas_label$label, deviation = unname(adhd_pos_deviation_pct[1:cortex_num]))
+p <- ggplot() +
+  geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+             mapping = aes(fill = deviation, colour = deviation), show.legend = FALSE, position = position_brain(hemi~side)) +
+  scale_fill_gradientn(colours = cmap_r, limits = c(0, 6), oob = squish) +
+  theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+print(p)
+ggsave(paste0(outpath, "/adhd_pos_deviation_pct.png"), bg = "transparent", plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+
+# Negative deviation brain map
+cmap_b <- c("#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2C678C")
+print(max(adhd_neg_deviation_pct))
+brain_plot_data <- data.frame(label = atlas_label, deviation = adhd_neg_deviation_pct[1:cortex_num])
+p <- ggplot() +
+  geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+             mapping = aes(fill = deviation, colour = deviation), show.legend = FALSE, position = position_brain(hemi~side)) +
+  scale_fill_gradientn(colours = cmap_b, limits = c(0, 4), oob = squish) +
+  theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+print(p)
+ggsave(paste0(outpath, "/adhd_neg_deviation_pct.png"), bg = "transparent", plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+```
+
+## Biotype Clustering
+
+### Evaluate Cluster Number
+
+Determines optimal cluster number using NbClust's winner-take-all approach, evaluating 30 validation indices and selecting the k value with the most votes.
+
+```{r NbClust}
+library(NbClust)
+
+clust_data <- adhd_0y_deviation_roi
+
+png(tempfile())
+nb_result <- NbClust(
+  data = clust_data,
+  distance = "euclidean",
+  min.nc = 2,        # minimum number of clusters
+  max.nc = 12,       # maximum number of clusters
+  method = "kmeans", # clustering method
+  index = "alllong"      # this evaluates all 30 indices
+)
+dev.off()
+
+# The optimal number of clusters (winner-take-all)
+clust_num <- nb_result$Best.nc[1]
+
+```
+
+
+```{r get_cluster_number}
+library(cluster)
+library(clusterCrit)
+
+k_vals  <- 2:12
+nstart  <- 100
+
+sil_avg <- numeric(length(k_vals)) # Silhouette
+ch_score <- numeric(length(k_vals)) # Calinski-Harabasz
+
+clust_data <- adhd_0y_deviation_roi
+
+for (i in seq_along(k_vals)) {
+  k <- k_vals[i]
+  km <- kmeans(clust_data, centers = k, nstart = nstart)
+  
+  # Silhouette (average width)
+  sil <- silhouette(km$cluster, dist(clust_data))
+  sil_avg[i] <- mean(sil[, 3])
+  
+  # Calinski-Harabasz
+  ch_score[i] <- intCriteria(as.matrix(clust_data), km$cluster, "Calinski_Harabasz")$calinski_harabasz
+}
+
+```
+
+
+```{r plot_cluster_curve}
+df_metrics <- data.frame(
+  k = k_vals,
+  Silhouette = sil_avg,
+  Calinski_Harabasz = ch_score
+)
+
+p <- ggplot(df_metrics, aes(x = k, y = Silhouette)) +
+  geom_line(linewidth = 1, color = "#6baed6") +
+  geom_point(size = 2, color = "#5A8DB0") +
+  labs(
+    x = "Number of clusters",
+    y = "Silhouette score"
+  ) + theme_classic() +
+  scale_x_continuous(breaks = seq(2, 12, 1)) +
+  theme(legend.position = "none", axis.text = element_text(size = 16, color = "black"),
+        axis.title = element_text(size = 16),
+        plot.title = element_text(size = 16, color = "black", hjust = 0.5, margin = margin(t = 0, b = -10)),
+        aspect.ratio = 0.8)
+print(p)
+ggsave(paste0(outpath, "/plot_silhouette_score.png"), bg = "transparent", 
+       plot = p, width = 11, height = 9, units = "cm", dpi = 1200)
+
+
+p <- ggplot(df_metrics, aes(x = k, y = Calinski_Harabasz)) +
+  geom_line(linewidth = 1, color = "#6baed6") +
+  geom_point(size = 2, color = "#5A8DB0") +
+  labs(
+    x = "Number of clusters",
+    y = "Calinski-Harabasz score"
+  ) + theme_classic() +
+  scale_x_continuous(breaks = seq(2, 12, 1)) +
+  theme(legend.position = "none", axis.text = element_text(size = 16, color = "black"),
+        axis.title = element_text(size = 16),
+        plot.title = element_text(size = 16, color = "black", hjust = 0.5, margin = margin(t = 0, b = -10)),
+        aspect.ratio = 0.8)
+print(p)
+ggsave(paste0(outpath, "/plot_calinski_harabasz_score.png"), bg = "transparent", 
+       plot = p, width = 11, height = 9, units = "cm", dpi = 1200)
+```
+
+### K-means Clustering
+```{r K-means clustering}
+set.seed(123456)
+kmeans_result <- kmeans(clust_data, centers = clust_num, nstart = 100)
+clust <- kmeans_result$cluster
+table(clust)
+
+simil_matrix <- proxy::simil(clust_data, method = "correlation")
+dist_matrix <- 1 - as.matrix(simil_matrix)
+diag(dist_matrix) <- 0
+sigma <- median(dist_matrix[lower.tri(dist_matrix)])
+affinity_matrix <- exp(-dist_matrix^2 / sigma^2)
+
+dist_matrix <- dist(clust_data)
+
+library(R.matlab)
+writeMat(file.path(outpath, "kmeans_clustering.mat"), 
+         dist_matrix = as.matrix(dist_matrix), affinity_matrix = as.matrix(affinity_matrix), clust = clust)
+
+# Save ADHD biotype information
+adhd_info <- sub_test_info[adhd_0y_idx, ]
+adhd_info$biotype <- paste0("biotype", clust)
+fwrite(adhd_info, paste0(outpath, "/adhd_biotype_info.csv"), row.names = FALSE)
+```
+
+### Biotype Deviation Map
+
+```{r plot_biotype_deviations}
+# Plot averaged deviation map for each ADHD biotype
+cmap <- rev(c("#A63726", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2C678C"))
+
+for (clust_i in 1:clust_num) {
+  clust_idx <- which(clust == clust_i)
+  adhd_deviation <- colMeans(adhd_0y_deviation_roi[clust_idx, ])
+  sample_size <- table(clust)[clust_i]
+  brain_plot_data <- data.frame(label = atlas_label, deviation = adhd_deviation[1:cortex_num])
+  thr <- 0.6
+  
+  plot_surface_thr(data = brain_plot_data, thr = thr, atlas = get(paste0("schaefer7_", cortex_num)),
+                   outpath = paste0(outpath, "/biotype", clust_i, "_deviation"))
+}
+```
+
+## Between-Biotype differences
+### Extreme deviation
+```{r compare_biotype_deviations}
+# Compare extreme deviation counts between biotypes
+idx1 <- which(clust == 1)
+idx2 <- which(clust == 2)
+
+counts_list <- list(
+  all = list(biotype1 = adhd_counts[idx1], biotype2 = adhd_counts[idx2], ylabel = "Number of extreme deviations"),
+  pos = list(biotype1 = adhd_pos_counts[idx1], biotype2 = adhd_pos_counts[idx2], ylabel = "Number of positive deviations"),
+  neg = list(biotype1 = adhd_neg_counts[idx1], biotype2 = adhd_neg_counts[idx2], ylabel = "Number of negative deviations")
+)
+
+stats_results <- data.frame(Type = character(), Test = character(), Statistic = numeric(), PValue = numeric(), stringsAsFactors = FALSE)
+
+for (type in names(counts_list)) {
+  biotype1 <- counts_list[[type]]$biotype1
+  biotype2 <- counts_list[[type]]$biotype2
+  y_label <- counts_list[[type]]$ylabel
+  
+  df <- data.frame(Group = c(rep("ADHD-1", length(biotype1)), rep("ADHD-2", length(biotype2))), ExtremeCount = c(biotype1, biotype2))
+  
+  # Statistical tests
+  t_test_result <- t.test(ExtremeCount ~ Group, data = df)
+  wilcox_result <- wilcox.test(ExtremeCount ~ Group, data = df)
+  stats_results <- stats_results %>%
+    add_row(Type = type, Test = "t-test", Statistic = t_test_result$statistic, PValue = t_test_result$p.value) %>%
+    add_row(Type = type, Test = "wilcox", Statistic = wilcox_result$statistic, PValue = wilcox_result$p.value)
+  
+  # Visualization
+  p <- ggplot(df, aes(x = Group, y = ExtremeCount, fill = Group)) +
+    geom_violin(alpha = 0.4, trim = FALSE) +
+    geom_boxplot(width = 0.2, outlier.shape = NA) +
+    stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+    scale_fill_manual(values = c("ADHD-1" = color_palette[1], "ADHD-2" = color_palette[2])) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(0, NA)) +
+    labs(x = "", y = y_label, title = "") +
+    theme_classic() +
+    theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"),
+          axis.title.y = element_text(size = 20, color = "black"), aspect.ratio = 1.2)
+  print(p)
+  ggsave(paste0(outpath, "/plot_adhd_deviation_count_", type, ".png"), bg = "transparent", 
+         plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+}
+print(stats_results)
+```
+
+### Biotype Demographics
+```{r prepare_statistics_data}
+# Define variable groups
+demo_var <- c("src_subject_id", "age", "sex", "race", "handedness", "eventname")
+dx_var <- c("diagnosis", "usage", "biotype")
+mri_var <- c("mean_fd", "TBV", paste0("network_strength_", atlas))
+cbcl_var <- c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")
+data_var <- c(demo_var, dx_var, mri_var, cbcl_var)
+
+# Merge biotype information with demographic data
+sub_info_stats <- merge(sub_demo_info, adhd_info[, c("src_subject_id", "biotype")], 
+                        by = "src_subject_id", multiple = "first", all.x = TRUE)
+sub_info_stats <- select(sub_info_stats, all_of(data_var))
+
+# Save merged statistics data
+fwrite(sub_info_stats, paste0(outpath, "/sub_demo_info_stats.csv"), row.names = FALSE)
+
+# Filter baseline ADHD subjects
+adhd_info_0y <- sub_info_stats %>% 
+  filter(eventname == "baseline_year_1_arm_1", diagnosis == "adhd", usage == "test")
+
+# Convert to factors
+factor_var <- c("sex", "race", "handedness", "diagnosis")
+adhd_info_0y[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+# Select variables for comparison
+demo_var_compare <- c("age", "sex", "handedness", "biotype")
+data_var_compare <- c(demo_var_compare, mri_var, cbcl_var)
+adhd_info_0y_compare <- select(adhd_info_0y, all_of(data_var_compare))
+
+# Compare groups
+res_0y <- compareGroups(biotype ~ ., data = as.data.table(adhd_info_0y_compare))
+restab_0y <- createTable(res_0y)
+print(restab_0y)
+
+# Export to Word
+export2word(restab_0y, paste0(outpath, "/biotype_demo_diff_0y.docx"))
+```
+
+```{r plot_demo_diff}
+adhd_biotype1 <- filter(adhd_info_0y_compare, biotype == "biotype1")
+adhd_biotype2 <- filter(adhd_info_0y_compare, biotype == "biotype2")
+
+t.test(adhd_biotype1$cbcl_scr_syn_attention_t, adhd_biotype2$cbcl_scr_syn_attention_t)
+t.test(adhd_biotype1$cbcl_scr_syn_external_t, adhd_biotype2$cbcl_scr_syn_external_t)
+
+p <- ggplot(adhd_info_0y_compare, aes(x = biotype, y = cbcl_scr_syn_attention_t, fill = biotype)) +
+  geom_violin(alpha = 0.4, trim = FALSE) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c("biotype1" = color_palette[1], "biotype2" = color_palette[2])) +
+  scale_x_discrete(labels = c("biotype1" = "ADHD-1", "biotype2" = "ADHD-2")) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(35, 100), breaks = seq(40, 100, by = 20)) +
+  labs(x = "", y = "Attention problem scores", title = "") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title.y = element_text(size = 20, color = "black"),
+    aspect.ratio = 1.2
+  )
+print(p)
+ggsave(paste0(outpath, "/plot_biotype_attention_diff.png"), bg = "transparent", plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+
+p <- ggplot(adhd_info_0y_compare, aes(x = biotype, y = cbcl_scr_syn_external_t, fill = biotype)) +
+  geom_violin(alpha = 0.4, width = 0.7, trim = FALSE) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c("biotype1" = color_palette[1], "biotype2" = color_palette[2])) +
+  scale_x_discrete(labels = c("biotype1" = "ADHD-1", "biotype2" = "ADHD-2")) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(15, 95), breaks = seq(20, 100, by = 20)) +
+  labs(x = "", y = "Externalizing problem scores", title = "") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title.y = element_text(size = 20, color = "black"),
+    aspect.ratio = 1.2
+  )
+print(p)
+ggsave(paste0(outpath, "/plot_biotype_external_diff.png"), bg = "transparent", plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+```
+
+
+
+## Case-Control Differences
+
+```{r match_td_biotypes}
+# Extract baseline subject information for ADHD and TD groups
+adhd_0y_info <- sub_test_info[adhd_0y_idx, ]
+td_0y_info <- sub_test_info[td_0y_idx, ]
+
+# Load ADHD-TD matched pairs
+pair_info <- fread(file.path(behav_path, "adhd_td_pair_test.csv"), na.strings = c("", "NA"))
+
+# Identify ADHD biotype clusters and matched TD subjects
+adhd1_0y_idx <- which(clust == 1)
+adhd2_0y_idx <- which(clust == 2)
+adhd1_0y_id <- adhd_0y_info$src_subject_id[adhd1_0y_idx]
+adhd2_0y_id <- adhd_0y_info$src_subject_id[adhd2_0y_idx]
+td1_0y_id <- pair_info$td_id[pair_info$adhd_id %in% adhd1_0y_id]
+td2_0y_id <- pair_info$td_id[pair_info$adhd_id %in% adhd2_0y_id]
+td1_0y_idx <- which(td_0y_info$src_subject_id %in% td1_0y_id)
+td2_0y_idx <- which(td_0y_info$src_subject_id %in% td2_0y_id)
+```
+
+### Whole-Brain Level
+
+```{r define_wholebrain_function}
+# Function to create whole-brain deviation boxplot
+boxplot_wholebrain_diff <- function(td_deviation, adhd_deviation, biotype, outpath) {
+  n_td <- length(td_deviation)
+  n_adhd <- length(adhd_deviation)
+  group <- factor(c(rep("td", n_td), rep("adhd", n_adhd)), levels = c("adhd", "td"))
+  
+  # Statistical tests
+  t_stats <- t.test(adhd_deviation, td_deviation)
+  cohens_d <- cohens_d(adhd_deviation, td_deviation)
+  
+  energy_wholebrain_stats <- data.frame(t = unname(t_stats$statistic), p = t_stats$p.value,
+                                        Cohens_d = cohens_d$Cohens_d, biotype = paste0(biotype, " (N = ", n_adhd, ")"))
+  
+  plot_data <- data.frame(energy_deviation = unname(c(td_deviation, adhd_deviation)), group = group,
+                          Cohens_d = energy_wholebrain_stats$Cohens_d)
+  
+  boxplot_color <- switch(biotype,
+                          "all" = c("#A3A3A3", "#E0E0E0"),
+                          "biotype1" = c(color_palette[1], "#E0E0E0"),
+                          "biotype2" = c(color_palette[2], "#E0E0E0"))
+  
+  x_labels <- switch(biotype,
+                     "all" = c("ADHD", "TDC"),
+                     "biotype1" = c("ADHD-1", "TDC-1"),
+                     "biotype2" = c("ADHD-2", "TDC-2"))
+  
+  p <- ggplot(plot_data, aes(x = group, y = energy_deviation, fill = group)) +
+    geom_boxplot(alpha = 0.4, outlier.shape = NA) +
+    geom_jitter(shape = 16, position = position_jitter(0.2)) +
+    scale_fill_manual(values = boxplot_color) +
+    stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+    scale_x_discrete(labels = x_labels) +
+    scale_y_continuous(limits = c(-3.7, 3.7), breaks = seq(-3, 3, by = 1)) +
+    labs(y = "Energy Deviation", x = "") +
+    # labs(title = paste0("Cohen's d = ", sprintf("%.2f", cohens_d)), y = "Energy Deviation", x = "") +
+    theme_classic() +
+    theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"),
+          axis.title = element_text(size = 20),
+          plot.title = element_text(size = 20, color = "black", hjust = 0.5, margin = margin(t = 0, b = -10)),
+          aspect.ratio = 1)
+  
+  print(paste0("Results of ", biotype, " (N = ", n_adhd, "):"))
+  print(p)
+  ggsave(file.path(outpath, paste0(biotype, "_wholebrain_boxplot.png")), bg = "transparent",
+         plot = p, width = 9, height = 9, units = "cm", dpi = 1200)
+  
+  return(energy_wholebrain_stats)
+}
+```
+
+```{r analyze_wholebrain_diff}
+# Analyze whole-brain energy differences
+energy_wholebrain_stats <- data.frame(t = numeric(0), p = numeric(0), Cohens_d = numeric(0))
+
+# All ADHD subjects combined
+stats_tmp <- boxplot_wholebrain_diff(td_0y_deviation_wholebrain, adhd_0y_deviation_wholebrain, "all", outpath)
+energy_wholebrain_stats <- rbind(energy_wholebrain_stats, stats_tmp)
+
+# ADHD Biotype 1 vs matched TD
+td1_0y_deviation_wholebrain <- td_0y_deviation_wholebrain[td1_0y_idx]
+adhd1_0y_deviation_wholebrain <- adhd_0y_deviation_wholebrain[adhd1_0y_idx]
+stats_tmp <- boxplot_wholebrain_diff(td1_0y_deviation_wholebrain, adhd1_0y_deviation_wholebrain, "biotype1", outpath)
+energy_wholebrain_stats <- rbind(energy_wholebrain_stats, stats_tmp)
+
+# ADHD Biotype 2 vs matched TD
+td2_0y_deviation_wholebrain <- td_0y_deviation_wholebrain[td2_0y_idx]
+adhd2_0y_deviation_wholebrain <- adhd_0y_deviation_wholebrain[adhd2_0y_idx]
+stats_tmp <- boxplot_wholebrain_diff(td2_0y_deviation_wholebrain, adhd2_0y_deviation_wholebrain, "biotype2", outpath)
+energy_wholebrain_stats <- rbind(energy_wholebrain_stats, stats_tmp)
+
+# Display results as table
+kable(energy_wholebrain_stats, format = "html", booktabs = TRUE,
+      caption = '<div style="color: black; font-weight: bold; text-align: left;">Case-Control Differences at the Whole-Brain Level</div>',
+      align = rep("l", ncol(energy_wholebrain_stats))) %>%
+  kable_styling(latex_options = "striped", full_width = FALSE)
+
+write.csv(energy_wholebrain_stats, paste0(outpath, "/energy_wholebrain_stats.csv"), row.names = FALSE)
+```
+
+### Network Level
+
+```{r define_network_function}
+# Function to create network-level radar plot
+radarplot_network_diff <- function(td_deviation, adhd_deviation, biotype, outpath) {
+  n_td <- nrow(td_deviation)
+  n_adhd <- nrow(adhd_deviation)
+  
+  energy_network_stats <- data.frame(t = numeric(0), p = numeric(0), Cohens_d = numeric(0))
+  
+  for (i in 1:8) {
+    t_stats <- t.test(adhd_deviation[, i], td_deviation[, i])
+    cohens_d <- cohens_d(adhd_deviation[, i], td_deviation[, i])
+    stats_tmp <- data.frame(t = unname(t_stats$statistic), p = t_stats$p.value, Cohens_d = cohens_d$Cohens_d)
+    energy_network_stats <- rbind(energy_network_stats, stats_tmp)
+  }
+  
+  p_fdr <- data.frame(p_fdr = p.adjust(energy_network_stats$p, method = "fdr"))
+  p_fdr_sig <- data.frame(p_fdr_sig = as.double(p_fdr < 0.05))
+  
+  net_label <- colnames(adhd_deviation)
+  energy_network_stats <- cbind(net_label, energy_network_stats, p_fdr, p_fdr_sig)
+  energy_network_stats <- energy_network_stats[, c(1:3, 5:6, 4)]
+  
+  write.csv(energy_network_stats, file.path(outpath, paste0(biotype, "_energy_network_stats.csv")), row.names = FALSE)
+  
+  # Radar plot
+  dat <- rbind(colMeans(adhd_deviation), colMeans(td_deviation))
+  rownames(dat) <- c("ADHD", "TDC")
+  dat <- as.data.frame(dat) %>% rownames_to_column("group")
+  
+  boxplot_color <- switch(biotype,
+                          "all" = c("#A3A3A3", "#E0E0E0"),
+                          "biotype1" = c(color_palette[1], "#E0E0E0"),
+                          "biotype2" = c(color_palette[2], "#E0E0E0"))
+  
+  p <- ggradar(dat, values.radar = c("-0.6", "0", "0.6"), grid.min = -0.6, grid.mid = 0, grid.max = 0.6,
+               gridline.min.linetype = "solid", gridline.mid.linetype = "solid", gridline.max.linetype = "solid",
+               gridline.mid.colour = "grey", gridline.label.offset = -0.05, group.line.width = 1, group.point.size = 3,
+               group.colours = boxplot_color, background.circle.colour = "white", legend.position = "none",
+               axis.label.offset = 1.17, fill = TRUE, fill.alpha = 0.4)
+  
+  p <- p + theme(
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background  = element_rect(fill = "transparent", colour = NA))
+  
+  print(paste0("Results of ", biotype, " (N = ", n_adhd, "):"))
+  print(p)
+  ggsave(file.path(outpath, paste0(biotype, "_network_radarplot.png")), plot = p, bg = "transparent",
+         width = 8, height = 8, units = "cm", dpi = 1200)
+  
+  return(energy_network_stats)
+}
+```
+
+```{r analyze_network_diff}
+# Analyze network-level energy differences
+radarplot_network_diff(td_0y_deviation_network, adhd_0y_deviation_network, "all", outpath)
+
+# ADHD Biotype 1 vs matched TD
+td1_0y_deviation_network <- td_0y_deviation_network[td1_0y_idx, ]
+adhd1_0y_deviation_network <- adhd_0y_deviation_network[adhd1_0y_idx, ]
+radarplot_network_diff(td1_0y_deviation_network, adhd1_0y_deviation_network, "biotype1", outpath)
+
+# ADHD Biotype 2 vs matched TD
+td2_0y_deviation_network <- td_0y_deviation_network[td2_0y_idx, ]
+adhd2_0y_deviation_network <- adhd_0y_deviation_network[adhd2_0y_idx, ]
+radarplot_network_diff(td2_0y_deviation_network, adhd2_0y_deviation_network, "biotype2", outpath)
+```
+
+### Regional Level
+
+```{r define_roi_function}
+# Function to plot regional-level differences
+plot_roi_diff <- function(td_deviation, adhd_deviation, biotype, outpath) {
+  n_td <- nrow(td_deviation)
+  n_adhd <- nrow(adhd_deviation)
+  
+  energy_roi_stats <- data.frame(t = numeric(0), p = numeric(0), Cohens_d = numeric(0))
+  
+  for (i in 1:roi_num) {
+    t_stats <- t.test(adhd_deviation[, i], td_deviation[, i])
+    cohens_d <- cohens_d(adhd_deviation[, i], td_deviation[, i])
+    stats_tmp <- data.frame(t = unname(t_stats$statistic), p = t_stats$p.value, Cohens_d = cohens_d$Cohens_d)
+    energy_roi_stats <- rbind(energy_roi_stats, stats_tmp)
+  }
+  
+  p_fdr <- data.frame(p_fdr = p.adjust(energy_roi_stats$p, method = "fdr"))
+  p_fdr_sig <- data.frame(p_fdr_sig = as.double(p_fdr < 0.05))
+  energy_roi_stats <- cbind(schaefer_label, energy_roi_stats, p_fdr, p_fdr_sig)
+  energy_roi_stats <- energy_roi_stats[, c(1:4, 6:7, 5)]
+  
+  write.csv(energy_roi_stats, file.path(outpath, paste0(biotype, "_energy_roi_stats.csv")), row.names = FALSE)
+  
+  # Plot effect size
+  energy_roi_stats$p_fdr_sig <- gsub("0", "Non_Sig", energy_roi_stats$p_fdr_sig)
+  energy_roi_stats$p_fdr_sig <- gsub("1", "Sig", energy_roi_stats$p_fdr_sig)
+  
+  cmap <- rev(c("#A63726", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2C678C"))
+  brain_plot_data <- data.frame(label = atlas_label, Cohens_d = energy_roi_stats$Cohens_d[1:cortex_num],
+                                sig_fdr = energy_roi_stats$p_fdr_sig[1:cortex_num])
+  thr <- 0.8
+  
+  # Significant deviation brain map
+  p <- ggplot() +
+    geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+               mapping = aes(fill = Cohens_d, colour = sig_fdr, size = I(0.3)), 
+               show.legend = FALSE, position = position_brain(hemi~side)) +
+    scale_colour_manual(values = c(Sig = "black", Non_Sig = "grey84")) +
+    scale_fill_gradientn(colors = cmap, limits = c(-thr, thr), oob = squish, values = scales::rescale(c(-thr, 0, thr))) +
+    theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+  print(p)
+  ggsave(file.path(outpath, paste0(biotype, "_brainmap_sig_deviation.png")), bg = "transparent", 
+         plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+}
+```
+
+```{r analyze_roi_diff}
+# Analyze regional-level energy differences
+plot_roi_diff(td_0y_deviation_roi, adhd_0y_deviation_roi, "all", outpath)
+
+# ADHD Biotype 1 vs matched TD
+td1_0y_deviation_roi <- td_0y_deviation_roi[td1_0y_idx, ]
+adhd1_0y_deviation_roi <- adhd_0y_deviation_roi[adhd1_0y_idx, ]
+plot_roi_diff(td1_0y_deviation_roi, adhd1_0y_deviation_roi, "biotype1", outpath)
+
+# ADHD Biotype 2 vs matched TD
+td2_0y_deviation_roi <- td_0y_deviation_roi[td2_0y_idx, ]
+adhd2_0y_deviation_roi <- adhd_0y_deviation_roi[adhd2_0y_idx, ]
+plot_roi_diff(td2_0y_deviation_roi, adhd2_0y_deviation_roi, "biotype2", outpath)
+```
+
+```{r save_results}
+# Save final results
+sub_test_info <- merge(sub_test_info, adhd_info[, c("src_subject_id", "biotype")],
+                       by = "src_subject_id", multiple = "first", all.x = TRUE)
+sub_test_info$biotype[which(sub_test_info$diagnosis == "td")] <- "td"
+
+save(W_scores_wholebrain, W_scores_network, W_scores_roi, sub_test_info,
+     file = file.path(outpath, "energy_deviation.RData"))
+```

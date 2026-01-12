@@ -1,0 +1,189 @@
+---
+title: "ADHD Biotype CBCL Longitudinal Change"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+
+# Load required libraries
+library(tidyverse)
+library(dplyr)
+library(psych)
+library(effectsize)
+library(data.table)
+library(compareGroups)
+library(scales)
+library(ggplot2)
+library(RColorBrewer)
+
+rm(list = ls())
+options(warn = -1)
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+demo_path <- "D:/ABCD/abcd-data-release-5.1/core/"
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+
+# Load ADHD biotype data
+adhd_info <- fread(paste0(outpath, "/adhd_biotype_info.csv"), na.strings = c("", "NA"))
+
+# Define color palette
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+```
+
+## Data Preparation
+
+```{r load_data}
+# Load energy deviation data
+load(file.path(outpath, "energy_deviation.RData"))
+
+# Load demographic and biotype information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+# Merge biotype information
+biotype_info <- read.csv(paste0(outpath, "/adhd_biotype_info.csv"))
+sub_test_info <- merge(sub_test_info, biotype_info[, c("src_subject_id", "biotype")], by = "src_subject_id", all.x = TRUE)
+sub_test_info$W_scores_wholebrain <- W_scores_wholebrain
+```
+
+## Data Analysis
+
+```{r prepare_longitudinal_data}
+# Define CBCL variables
+cbcl_vars <- c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")
+
+# Identify ADHD subjects at baseline with 2-year follow-up data
+sub_adhd_0y <- sub_test_info %>% 
+  filter(diagnosis == "adhd" & eventname == "baseline_year_1_arm_1") %>%
+  pull(src_subject_id)
+
+adhd_0y_2y <- sub_test_info %>%
+  filter(src_subject_id %in% sub_adhd_0y) %>%
+  group_by(src_subject_id) %>%
+  filter(n() == 2) %>%
+  ungroup() %>%
+  mutate(eventname = factor(eventname, levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1"))) %>% 
+  select(src_subject_id, eventname, biotype, all_of(cbcl_vars))
+```
+
+```{r paired_ttest}
+df_wide <- adhd_0y_2y %>%
+  select(src_subject_id, biotype, eventname,
+         cbcl_scr_syn_attention_t, cbcl_scr_syn_external_t) %>%
+  pivot_wider(
+    names_from = eventname,
+    values_from = c(cbcl_scr_syn_attention_t, cbcl_scr_syn_external_t)
+  )
+
+biotypes <- unique(df_wide$biotype)
+
+results <- list()
+
+for (b in biotypes) {
+  sub <- df_wide %>% filter(biotype == b)
+
+  results[[b]] <- list(
+    attention = t.test(
+      sub$cbcl_scr_syn_attention_t_2_year_follow_up_y_arm_1,
+      sub$cbcl_scr_syn_attention_t_baseline_year_1_arm_1,
+      paired = TRUE
+    ),
+    external = t.test(
+      sub$cbcl_scr_syn_external_t_2_year_follow_up_y_arm_1,
+      sub$cbcl_scr_syn_external_t_baseline_year_1_arm_1,
+      paired = TRUE
+    )
+  )
+}
+
+results
+```
+
+```{r plot_long_attention}
+## Attention
+p <- ggplot(adhd_0y_2y, aes(x = eventname, y = cbcl_scr_syn_attention_t)) +
+  geom_boxplot(aes(fill = biotype), width = 0.8, alpha = 0.4, outlier.shape = NA) +
+  geom_point(width = 0.15, size = 1.5) +
+  geom_line(aes(group = src_subject_id), color = "gray", linetype = "dashed") +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", linewidth = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  theme_minimal() + theme(legend.position="none") +
+  scale_fill_manual(values = color_palette) +
+  labs(x = "", y = "Attention problem scores", title = "") +
+  scale_x_discrete(labels = c("baseline_year_1_arm_1" = "baseline", "2_year_follow_up_y_arm_1" = "2-year")) +
+  facet_wrap(~ biotype) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    title = element_text(size = 16),
+    strip.text = element_blank(),   # hide facet labels
+    axis.text = element_text(size = 16, color = "black"),
+    axis.title = element_text(size = 16),
+    aspect.ratio = 1.8
+  )
+print(p)
+
+plot_outpath <- file.path(outpath, "cbcl_attention_diff_boxplot.png")
+ggsave(plot_outpath, plot = p, width = 11, height = 11, units = "cm", dpi = 1200)
+```
+
+
+```{r plot_long_external}
+## External
+p <- ggplot(adhd_0y_2y, aes(x = eventname, y = cbcl_scr_syn_external_t)) +
+  geom_boxplot(aes(fill = biotype), width = 0.8, alpha = 0.4, outlier.shape = NA) +
+  geom_point(width = 0.15, size = 1.5) +
+  geom_line(aes(group = src_subject_id), color = "gray", linetype = "dashed") +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", linewidth = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  theme_minimal() + theme(legend.position="none") +
+  scale_fill_manual(values = color_palette) +
+  labs(x = "", y = "Externalizing problem scores", title = "") +
+  scale_x_discrete(labels = c("baseline_year_1_arm_1" = "baseline", "2_year_follow_up_y_arm_1" = "2-year")) +
+  facet_wrap(~ biotype) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    title = element_text(size = 16),
+    strip.text = element_blank(),   # hide facet labels
+    axis.text = element_text(size = 16, color = "black"),
+    axis.title = element_text(size = 16),
+    aspect.ratio = 1.8
+  )
+print(p)
+
+plot_outpath <- file.path(outpath, "cbcl_external_diff_boxplot.png")
+ggsave(plot_outpath, plot = p, width = 11, height = 11, units = "cm", dpi = 1200)
+```
+
+
+
+
