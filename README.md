@@ -7,6 +7,20 @@ Code and data accompanying the manuscript: **“Structural network control of wo
 
 Altered white-matter connectivity and atypical working-memory–related brain activation have been reported in attention-deficit/hyperactivity disorder (ADHD), yet how disruptions in structural brain networks constrain working-memory state transitions in ADHD remains unclear. How such network control mechanisms relate to developmental heterogeneity and symptom trajectories has not been established. Here, we combined network control theory with normative modeling to examine how network topology supports working-memory state transitions in 4,281 children (621 with ADHD). Using diffusion MRI–derived structural connectomes, we estimated the control energy required to transition between working-memory states defined by task-fMRI activation. Normative models trained in typically developing children generated individualized deviation maps of regional control energy, revealing pronounced inter-individual heterogeneity in ADHD. Clustering analysis revealed divergent network control regimes, with one biotype showing lower-than-expected energy demands and another showing globally elevated energy requirements accompanied by more severe attention and externalizing symptoms. Both biotypes showed symptom improvement and normalization of control-energy deviations over two years, with coupling between reductions in control-energy deviation and symptom improvement specific to the high-energy biotype. These findings suggest that heterogeneity in childhood ADHD reflects divergent white-matter network mechanisms constraining working-memory state transitions during development, with direct relevance to symptom trajectories.
 
+## Software and system requirements
+### Diffusion & structural MRI preprocessing
+* FreeSurfer v7.1.1 (https://surfer.nmr.mgh.harvard.edu/)
+* QSIPrep 0.16.0 (https://qsiprep.readthedocs.io/)
+* OS: Linux
+
+### Postprocessing
+* Connectome Workbench v2.0.1 (https://www.humanconnectome.org/software/connectome-workbench)
+* R v4.2.3 (https://www.r-project.org)
+* MATLAB R2023a (https://www.mathworks.com/)
+* OS: Windows / Linux
+
+The system requirements and installation guide for each software can be found on its respective website.
+
 ## `data`
 
 - The [sub_info](data/sub_info) folder contains the subject information used in this study. 
