@@ -21,7 +21,7 @@ Altered white-matter connectivity and atypical working-memory–related brain ac
 
 The system requirements and installation guide for each software can be found on its respective website.
 
-## `data`
+## data
 
 - The [sub_info](data/sub_info) folder contains the subject information used in this study. 
 - The [control_energy](data/control_energy) folder contains the harmonized regional control energy the ABCD, saved in the `.csv` file.
@@ -29,12 +29,12 @@ The system requirements and installation guide for each software can be found on
 - The [parcellation](data/parcellation) folder contains the parcellation files (`Schaefer-400`/`Schaefer-200` with 52 subcortical regions) used in this study (https://github.com/PennLINC/AtlasPack).
 
 
-## `functions`
+## functions
 
 The [`functions/`](functions) folder contains R and MATLAB functions required to run the analyses and reproduce the figures in this study.
 
 
-## `code`
+## code
 
 ### `step_01_nm_sample_construction`
 
