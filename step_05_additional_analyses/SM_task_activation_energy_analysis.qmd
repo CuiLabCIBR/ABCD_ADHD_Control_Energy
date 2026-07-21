@@ -1,0 +1,301 @@
+---
+title: "ABCD_Participants_nBack"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-06-03"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load packages
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(data.table)
+  library(knitr)
+  library(compareGroups)
+  library(stringr)
+  library(VertexWiseR)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Define input paths and analysis parameters
+demo_path <- "D:/ABCD/abcd-data-release-5.1/core/"
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- file.path(root_path, "data", "sub_info")
+baseline_event <- "baseline_year_1_arm_1"
+
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Data Preparation
+
+```{r}
+# Load normative-deviation outputs and retain baseline task sample information
+load(file.path(outpath, "energy_deviation.RData"))
+
+sub_task_info <- sub_test_info %>% 
+  filter(eventname == baseline_event) %>% 
+  select(src_subject_id, eventname, age, sex, biotype)
+
+# Retain participants who passed nBack imaging QC
+mri_y_qc_incl <- fread(file.path(demo_path, "imaging", "mri_y_qc_incl.csv"))
+
+sub_qc_incl <- mri_y_qc_incl %>% 
+  filter(eventname == baseline_event, imgincl_nback_include == 1) %>% 
+  select(src_subject_id, eventname)
+
+# Add task fMRI head motion
+mri_y_qc_motion <- fread(file.path(demo_path, "imaging", "mri_y_qc_motion.csv"))
+
+sub_qc_motion_incl <- mri_y_qc_motion %>% 
+  filter(eventname == baseline_event) %>%
+  select(src_subject_id, eventname, mean_fd = tfmri_nback_all_meanmotion)
+
+sub_task_info <- sub_task_info %>%
+  inner_join(sub_qc_incl, by = c("src_subject_id", "eventname")) %>%
+  inner_join(sub_qc_motion_incl, by = c("src_subject_id", "eventname"))
+
+td_task_info <- sub_task_info %>% filter(biotype == "td")
+adhd_task_info <- sub_task_info %>% filter(biotype != "td")
+
+cat("Baseline nBack QC-included sample:", nrow(sub_task_info), "participants\n")
+cat("TD sample:", nrow(td_task_info), "participants\n")
+cat("ADHD sample:", nrow(adhd_task_info), "participants\n")
+print(table(sub_task_info$biotype))
+```
+
+```{r}
+# Load nBack 2-back versus 0-back APARC/DK activation data and dictionary
+mri_y_tfmr_nback_2bv0b_dsk <- fread(file.path(demo_path, "imaging", "mri_y_tfmr_nback_2bv0b_dsk.csv"))
+
+mri_y_tfmr_nback_2bv0b_dsk_dict <- fread(file.path(root_path, "data", "task_activation", "nBack", "mri_y_tfmr_nback_2bv0b_dsk_dict.csv"))
+
+mri_y_tfmr_nback_2bv0b_dsk_dict <- mri_y_tfmr_nback_2bv0b_dsk_dict %>%
+  mutate(var_label = str_remove(var_label, "^Beta weight for nBack all 2 back versus 0 back contrast in APARC ROI "))
+
+dsk_label <- mri_y_tfmr_nback_2bv0b_dsk_dict$var_label
+dsk_name <- mri_y_tfmr_nback_2bv0b_dsk_dict$var_name
+
+mri_y_tfmr_nback_2bv0b_dsk <- mri_y_tfmr_nback_2bv0b_dsk %>% 
+  filter(eventname == baseline_event) %>% 
+  select(src_subject_id, eventname, all_of(dsk_name))
+
+# Merge activation values with sample information and replace variable names with DK labels
+sub_activation_dsk <- sub_task_info %>%
+  inner_join(mri_y_tfmr_nback_2bv0b_dsk, by = c("src_subject_id", "eventname")) %>%
+  rename_with(~dsk_label[match(.x, dsk_name)], .cols = any_of(dsk_name))
+
+td_activation_dsk <- sub_activation_dsk %>% filter(biotype == "td")
+adhd_activation_dsk <- sub_activation_dsk %>% filter(biotype != "td")
+
+cat("Activation data:", nrow(sub_activation_dsk), "participants x", length(dsk_label), "DK regions\n")
+print(table(sub_activation_dsk$biotype))
+```
+
+## Case-control differences
+
+```{r}
+# Compare activation between ADHD biotypes after adjusting for age, sex and mean FD.
+# beta and t indicate the adjusted difference of the non-reference biotype relative to biotype1.
+run_covariate_group_comparison <- function(data, roi_vars) {
+  data <- data %>%
+    mutate(biotype = relevel(factor(biotype), ref = "biotype1"),
+           sex = factor(sex),
+           age = as.numeric(age),
+           mean_fd = as.numeric(mean_fd))
+
+  map_dfr(roi_vars, function(roi) {
+    model_data <- data %>%
+      select(all_of(c(roi, "biotype", "age", "sex", "mean_fd"))) %>%
+      rename(activation = all_of(roi)) %>%
+      drop_na()
+
+    fit <- lm(activation ~ biotype + age + sex + mean_fd, data = model_data)
+    fit_coef <- summary(fit)$coefficients
+    group_coef <- grep("^biotype", rownames(fit_coef), value = TRUE)[1]
+
+    tibble(beta = fit_coef[group_coef, "Estimate"],
+           t = fit_coef[group_coef, "t value"],
+           p = fit_coef[group_coef, "Pr(>|t|)"])
+  })
+}
+```
+
+```{r}
+adhd_activation_dsk <- as.data.frame(adhd_activation_dsk)
+activation_vars <- dsk_label
+
+activation_dsk_stats <- run_covariate_group_comparison(adhd_activation_dsk, activation_vars) %>%
+  mutate(roi_label = activation_vars, .before = beta) %>%
+  mutate(p_fdr = p.adjust(p, method = "fdr"),
+         p_sig = as.integer(p < 0.05),
+         p_fdr_sig = as.integer(p_fdr < 0.05))
+
+cat("ADHD biotype comparison completed for", nrow(activation_dsk_stats), "DK regions\n")
+cat("Nominally significant regions:", sum(activation_dsk_stats$p_sig), "\n")
+cat("FDR-significant regions:", sum(activation_dsk_stats$p_fdr_sig), "\n")
+
+activation_dsk_stats %>%
+  arrange(p) %>%
+  slice_head(n = 10) %>%
+  kable(digits = 4, caption = "Top 10 DK activation differences between ADHD biotypes")
+```
+
+## Schaefer400 to DK68 mapping
+
+Note: The DK labels in the csv dictionary and VertexWiseR are not in the same order. Therefore, the following code uses the VertexWiseR DK-70 order as the reference and then retains the 68 cortical DK regions.
+
+```{r}
+# Extract DK-70 labels from VertexWiseR and retain the 68 cortical labels used in the activation file
+dk70_label <- ROImap_fs5@atlases[[1]]
+dk70_label <- dk70_label[!is.na(dk70_label) & dk70_label != ""]
+
+exclude_label <- setdiff(dk70_label, dsk_label)
+dk68_keep <- dk70_label %in% dsk_label
+dk68_label <- dk70_label[dk68_keep]
+
+cat("DK-70 labels:", length(dk70_label), "\n")
+cat("Excluded labels:", paste(exclude_label, collapse = ", "), "\n")
+cat("Retained DK-68 labels:", length(dk68_label), "\n")
+stopifnot(length(dk68_label) == 68)
+```
+
+```{r}
+# Build a DK68 x Schaefer400 spatial weight matrix.
+# Each row indicates the proportion of DK vertices assigned to each Schaefer400 parcel.
+I400 <- diag(400)
+
+surf_I400 <- atlas_to_surf(I400, template = "fsaverage5")
+dk70_from_schaefer400 <- surf_to_atlas(surf_I400, atlas = 1, mode = "mean")
+
+W <- t(as.matrix(dk70_from_schaefer400))
+W68 <- W[dk68_keep, , drop = FALSE]
+
+rownames(W68) <- dk68_label
+colnames(W68) <- paste0("Schaefer_", seq_len(400))
+
+cat("Mapping matrix W68:", nrow(W68), "DK regions x", ncol(W68), "Schaefer parcels\n")
+cat("Range of row sums:", paste(round(range(rowSums(W68)), 4), collapse = " to "), "\n")
+```
+
+```{r}
+# Project Schaefer400 deviation scores to DK68 using the spatial weight matrix
+load(file.path(outpath, "energy_deviation.RData"))
+
+deviation_schaefer400 <- as.matrix(W_scores_roi[, seq_len(400)])
+storage.mode(deviation_schaefer400) <- "numeric"
+
+deviation_dsk <- deviation_schaefer400 %*% t(W68)
+colnames(deviation_dsk) <- dk68_label
+
+cat("Schaefer400 deviation matrix:", nrow(deviation_schaefer400), "participants x", ncol(deviation_schaefer400), "parcels\n")
+cat("DK68 deviation matrix:", nrow(deviation_dsk), "participants x", ncol(deviation_dsk), "regions\n")
+```
+
+```{r}
+# Combine DK68 deviation scores with participant information and align with activation data
+sub_deviation_dsk <- bind_cols(sub_test_info, as.data.frame(deviation_dsk)) %>% 
+  filter(eventname == baseline_event) %>% 
+  select(src_subject_id, eventname, age, sex, biotype, all_of(dk68_label)) %>% 
+  filter(src_subject_id %in% sub_activation_dsk$src_subject_id) %>%
+  arrange(match(src_subject_id, sub_activation_dsk$src_subject_id))
+
+stopifnot(identical(sub_deviation_dsk$src_subject_id, sub_activation_dsk$src_subject_id))
+
+td_deviation_dsk <- sub_deviation_dsk %>% filter(biotype == "td")
+adhd_deviation_dsk <- sub_deviation_dsk %>% filter(biotype != "td")
+
+cat("Deviation data aligned with activation data:", identical(sub_deviation_dsk$src_subject_id, sub_activation_dsk$src_subject_id), "\n")
+cat("TD deviation sample:", nrow(td_deviation_dsk), "participants\n")
+cat("ADHD deviation sample:", nrow(adhd_deviation_dsk), "participants\n")
+```
+
+# Deviation-Activation Correlation
+
+## Control covariates in activation
+
+```{r}
+# Regress age, sex and mean FD from activation values and add the intercept back.
+# This yields covariate-adjusted activation values on the original activation scale.
+sub_activation_dsk_adj <- sub_activation_dsk
+sub_activation_dsk_adj$sex <- as.factor(sub_activation_dsk_adj$sex)
+
+for (roi in dk68_label) {
+  model <- lm(sub_activation_dsk[[roi]] ~ age + sex + mean_fd, data = sub_activation_dsk_adj)
+  sub_activation_dsk_adj[[roi]] <- resid(model) + coef(model)[1]
+}
+
+sub_activation_dsk_adj <- sub_activation_dsk_adj %>%
+  select(src_subject_id, eventname, age, sex, mean_fd, biotype, all_of(dk68_label))
+
+td_activation_dsk_adj <- sub_activation_dsk_adj %>% filter(biotype == "td")
+adhd_activation_dsk_adj <- sub_activation_dsk_adj %>% filter(biotype != "td")
+
+stopifnot(identical(sub_activation_dsk_adj$src_subject_id, sub_deviation_dsk$src_subject_id))
+stopifnot(identical(td_activation_dsk_adj$src_subject_id, td_deviation_dsk$src_subject_id))
+stopifnot(identical(adhd_activation_dsk_adj$src_subject_id, adhd_deviation_dsk$src_subject_id))
+
+cat("Activation residualization completed for", length(dk68_label), "DK regions\n")
+cat("Adjusted activation data:", nrow(sub_activation_dsk_adj), "participants x", length(dk68_label), "regions\n")
+```
+
+```{r}
+# Run ROI-wise Spearman correlations between adjusted activation and deviation.
+run_dsk_spearman <- function(activation_data, deviation_data, roi_vars, sample_label) {
+  stopifnot(identical(activation_data$src_subject_id, deviation_data$src_subject_id))
+
+  result <- map_dfr(roi_vars, function(roi) {
+    tmp <- data.frame(activation = activation_data[[roi]], deviation = deviation_data[[roi]])
+    tmp <- tmp[complete.cases(tmp), ]
+    cor_test <- cor.test(tmp$activation, tmp$deviation, method = "spearman", exact = FALSE)
+    tibble(region = roi, n = nrow(tmp), r = unname(cor_test$estimate), p = cor_test$p.value)
+  }) %>%
+    mutate(p_fdr = p.adjust(p, method = "fdr"),
+           p_sig = as.integer(p < 0.05),
+           p_fdr_sig = as.integer(p_fdr < 0.05))
+
+  cat("\nSpearman correlation:", sample_label, "\n")
+  cat("Regions tested:", nrow(result), "\n")
+  cat("N range:", paste(range(result$n), collapse = " to "), "\n")
+  cat("Nominally significant regions:", sum(result$p_sig), "\n")
+  cat("FDR-significant regions:", sum(result$p_fdr_sig), "\n")
+
+  print(result %>% arrange(p) %>% slice_head(n = 10))
+  return(result)
+}
+
+cor_result_dsk_sub <- run_dsk_spearman(sub_activation_dsk_adj, sub_deviation_dsk, dk68_label, "all participants")
+cor_result_dsk_td <- run_dsk_spearman(td_activation_dsk_adj, td_deviation_dsk, dk68_label, "TD")
+cor_result_dsk_adhd <- run_dsk_spearman(adhd_activation_dsk_adj, adhd_deviation_dsk, dk68_label, "ADHD")
+```

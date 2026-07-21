@@ -1,0 +1,211 @@
+---
+title: "ADHD Energy Deviation Biotype - Leave-One-Site-Out Validation"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(SNFtool)
+  library(data.table)
+  library(scales)
+  library(mclust)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Data Preparation
+
+```{r load_subject_info}
+# Load demographic information (without site regressed out)
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+# Remove subjects with missing usage information
+idx_nonNA <- which(!is.na(sub_demo_info$usage))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+# Split into train and test sets
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+```
+
+## Data Analysis
+
+### Energy Calculation
+
+```{r calculate_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_data <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_roi <- energy_data$ROI[idx_nonNA, ]
+energy_network <- energy_data$NetAvg[idx_nonNA, ]
+energy_wholebrain <- as.data.frame(energy_data$WholeBrain[idx_nonNA, ])
+colnames(energy_wholebrain) <- "WholeBrain"
+
+roi_num <- ncol(energy_roi)
+cortex_num <- roi_num - 52
+```
+
+### Energy Deviation
+
+```{r calculate_w_scores}
+# Define covariates for W-score calculation
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_data <- sub_demo_info[, ..covariates]
+
+# Define indices
+train_idx <- which(sub_demo_info$usage == "train")
+test_idx <- which(sub_demo_info$usage == "test")
+adhd_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "adhd")
+td_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "td" & sub_test_info$matched == 1)
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+W_scores_roi <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_roi <- W_scores_roi[adhd_0y_idx, ]
+```
+
+## Biotype Clustering
+
+```{r kmeans_clustering}
+clust_num <- 2
+set.seed(123456)
+kmeans_result <- kmeans(adhd_0y_deviation_roi, centers = clust_num, nstart = 100)
+clust <- kmeans_result$cluster
+
+table(clust)
+```
+
+## Leave-One-Site-Out Clustering
+
+```{r generate_site_samples}
+# Identify unique sites
+adhd_test_info <- sub_test_info[adhd_0y_idx, ]
+sites <- unique(adhd_test_info$site_id)
+n_site <- length(sites)
+
+print(paste("Total number of sites:", n_site))
+print(sites)
+
+# Generate indices excluding each site
+sampled_index <- lapply(sites, function(site_to_exclude) {
+  which(adhd_test_info$site_id != site_to_exclude)
+})
+```
+
+```{r site_clustering}
+# Perform clustering with each site excluded
+clust_all <- list()
+
+for (i in 1:n_site) {
+  print(paste("Processing site", i, "of", n_site))
+  
+  idx_tmp <- sampled_index[[i]]
+  data_tmp <- adhd_0y_deviation_roi[idx_tmp, ]
+  
+  clust_num <- 2
+  
+  set.seed(123456)
+  kmeans_result <- kmeans(data_tmp, centers = clust_num, nstart = 100)
+  clust_tmp <- kmeans_result$cluster
+  
+  clust_all[[i]] <- clust_tmp
+}
+
+# Save results
+save(sampled_index, clust_all, clust, file = file.path(outpath, "leave_one_site_out_clustering.RData"))
+```
+
+## Adjusted Rand Index
+
+```{r calculate_ari}
+# Load leave-one-site-out results (if needed)
+load(file.path(outpath, "leave_one_site_out_clustering.RData"))
+
+# Calculate ARI for each site exclusion
+ari_site <- numeric(n_site)
+
+for (i in 1:n_site) {
+  idx_tmp <- sampled_index[[i]]
+  clust_1 <- clust[idx_tmp]
+  clust_2 <- clust_all[[i]]
+  ari_site[i] <- adjustedRandIndex(clust_1, clust_2)
+}
+```
+
+```{r plot_ari_distribution}
+# Create a data frame for plotting
+df <- data.frame(
+  Site = factor(1:21, levels = 1:21),
+  ARI = ari_site
+)
+
+# Create the bar plot
+p <- ggplot(df, aes(x = Site, y = ARI)) +
+  geom_bar(stat = "identity", fill = "#6baed6", width = 0.7, alpha = 0.8) +
+  labs(x = "Site ID", y = "Adjusted Rand Index"
+  ) +
+  theme_classic() +
+  scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, 0.25)) +
+  theme(legend.position = "none", axis.text = element_text(size = 17, color = "black"), 
+        axis.title = element_text(size = 17), 
+        plot.title = element_text(size = 17, color = "black", hjust = 0.5), 
+        aspect.ratio = 0.4)
+print(p)
+
+ggsave(file.path(outpath, "ARI_sites.png"), bg = "transparent",
+       plot = p, width = 24, height = 10, units = "cm", dpi = 1200)
+
+# Summary statistics
+print(paste("Median ARI:", round(median(ari_site), 4)))
+print(paste("Mean ARI:", round(mean(ari_site), 4)))
+print(paste("Range:", round(min(ari_site), 4), "-", round(max(ari_site), 4)))
+```
+

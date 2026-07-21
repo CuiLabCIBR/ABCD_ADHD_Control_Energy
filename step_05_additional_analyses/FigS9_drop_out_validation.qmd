@@ -1,0 +1,458 @@
+---
+title: "Fig.S9. Baseline characterization of ADHD completers and dropouts"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-04-26"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggradar)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(SNFtool)
+  library(data.table)
+  library(scales)
+  library(knitr)
+  library(kableExtra)
+  library(RColorBrewer)
+  library(compareGroups)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface_thr.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+
+# Define color palettes
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+network_names <- c("VS", "SM", "DA", "VA", "LM", "FP", "DM", "SC")
+```
+
+## Data Preparation
+
+```{r load_subject_info}
+# Load demographic information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+# Define variable groups
+demo_var <- c("src_subject_id", "eventname", "age", "sex", "race", "handedness", 
+              "diagnosis", "usage", "ksads_adhd")
+mri_var <- c("mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_var <- sub_demo_info %>% 
+  select(starts_with("cbcl") | starts_with("nihtbx") | starts_with("tfmri")) %>%
+  colnames()
+
+# Select relevant variables and convert to factors
+sub_demo_info <- sub_demo_info %>% select(all_of(c(demo_var, mri_var, behav_var)))
+factor_var <- c("sex", "race", "handedness", "diagnosis")
+sub_demo_info[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+# Remove subjects with missing usage information
+# sub_demo_info$usage[is.na(sub_demo_info$usage)] <- "train"
+idx_nonNA <- which(!is.na(sub_demo_info$usage))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+# # Split into train and test sets
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+```
+
+## Data Analysis
+
+### Energy Calculation
+
+```{r calculate_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_data <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_roi <- energy_data$ROI[idx_nonNA, ]
+energy_network <- energy_data$NetAvg[idx_nonNA, ]
+energy_wholebrain <- as.data.frame(energy_data$WholeBrain[idx_nonNA, ])
+colnames(energy_wholebrain) <- "WholeBrain"
+
+roi_num <- ncol(energy_roi)
+cortex_num <- roi_num - 52  # 52 subcortical ROIs
+```
+
+## Energy Deviation
+
+```{r calculate_w_scores}
+# Define covariates for W-score calculation
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_data <- sub_demo_info[, ..covariates]
+
+# Define indices for train, test, and baseline groups
+train_idx <- which(sub_demo_info$usage == "train")
+test_idx <- which(sub_demo_info$usage == "test")
+adhd_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "adhd")
+
+# Calculate W-scores at whole-brain level
+lm_data <- cbind(energy_wholebrain, behav_data)
+W_scores_wholebrain <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_wholebrain <- W_scores_wholebrain[adhd_0y_idx, ]
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+W_scores_roi <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_roi <- W_scores_roi[adhd_0y_idx, ]
+
+```
+
+### Extreme Deviation
+
+```{r identify_extreme_deviations}
+# Define threshold for extreme deviation
+W_thr <- 2.6
+
+# Calculate extreme deviation metrics for ADHD
+adhd_deviation <- abs(adhd_0y_deviation_roi) > W_thr
+adhd_deviation_pct <- colMeans(adhd_deviation) * 100
+adhd_pos_deviation <- adhd_0y_deviation_roi > W_thr
+adhd_pos_deviation_pct <- colMeans(adhd_pos_deviation) * 100
+adhd_neg_deviation <- adhd_0y_deviation_roi < -W_thr
+adhd_neg_deviation_pct <- colMeans(adhd_neg_deviation) * 100
+adhd_counts <- rowSums(adhd_deviation)
+adhd_pos_counts <- rowSums(adhd_pos_deviation)
+adhd_neg_counts <- rowSums(adhd_neg_deviation)
+
+```
+
+
+```{r}
+adhd_621 <- sub_test_info[adhd_0y_idx, src_subject_id]
+sub_test_info_2y <- sub_test_info %>% filter(eventname == "2_year_follow_up_y_arm_1")
+adhd_621_2y <- sub_test_info_2y$src_subject_id
+
+idx1 <- which(adhd_621 %in% adhd_621_2y)
+idx2 <- which(!adhd_621 %in% adhd_621_2y)
+
+```
+
+
+## Between-Biotype differences
+### Extreme deviation
+```{r compare_biotype_deviations}
+# Compare extreme deviation counts between biotypes
+counts_list <- list(
+  all = list(Completer = adhd_counts[idx1], Dropout = adhd_counts[idx2], ylabel = "Number of extreme deviations"),
+  pos = list(Completer = adhd_pos_counts[idx1], Dropout = adhd_pos_counts[idx2], ylabel = "Number of positive deviations"),
+  neg = list(Completer = adhd_neg_counts[idx1], Dropout = adhd_neg_counts[idx2], ylabel = "Number of negative deviations")
+)
+
+stats_results <- data.frame(Type = character(), Test = character(), Statistic = numeric(), PValue = numeric(), stringsAsFactors = FALSE)
+
+for (type in names(counts_list)) {
+  Completer <- counts_list[[type]]$Completer
+  Dropout <- counts_list[[type]]$Dropout
+  y_label <- counts_list[[type]]$ylabel
+  
+  df <- data.frame(Group = c(rep("Completer", length(Completer)), rep("Dropout", length(Dropout))), ExtremeCount = c(Completer, Dropout))
+  
+  # Statistical tests
+  t_test_result <- t.test(ExtremeCount ~ Group, data = df)
+  wilcox_result <- wilcox.test(ExtremeCount ~ Group, data = df)
+  stats_results <- stats_results %>%
+    add_row(Type = type, Test = "t-test", Statistic = t_test_result$statistic, PValue = t_test_result$p.value) %>%
+    add_row(Type = type, Test = "wilcox", Statistic = wilcox_result$statistic, PValue = wilcox_result$p.value)
+  
+  # Visualization
+  p <- ggplot(df, aes(x = Group, y = ExtremeCount, fill = Group)) +
+    geom_violin(alpha = 0.4, trim = FALSE) +
+    geom_boxplot(width = 0.2, outlier.shape = NA) +
+    stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+    scale_fill_manual(values = c("Completer" = color_palette[1], "Dropout" = color_palette[2])) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(0, NA)) +
+    labs(x = "", y = y_label, title = "") +
+    theme_classic() +
+    theme(legend.position = "none", axis.text = element_text(size = 20, color = "black"),
+          axis.title.y = element_text(size = 20, color = "black"), aspect.ratio = 1.2)
+  print(p)
+  ggsave(paste0(outpath, "/plot_completer_dropout_deviation_count_", type,".png"), 
+       bg = "transparent", plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+}
+print(stats_results)
+```
+
+### Biotype Demographics
+```{r prepare_statistics_data}
+
+biotype_info <- fread(paste0(outpath, "/adhd_biotype_info.csv"))
+
+# Define variable groups
+demo_var <- c("src_subject_id", "age", "sex", "race", "handedness", "eventname")
+dx_var <- c("usage", "ksads_adhd", "biotype")
+mri_var <- c("mean_fd", "TBV", paste0("network_strength_", atlas))
+cbcl_var <- c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")
+data_var <- c(demo_var, dx_var, mri_var, cbcl_var)
+
+adhd_info_0y <- select(biotype_info, all_of(data_var))
+
+# Convert to factors
+factor_var <- c("sex", "race", "handedness", "ksads_adhd")
+adhd_info_0y[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+adhd_info_0y$if_long <- NA_character_
+adhd_info_0y$if_long[idx1] <- "completer"
+adhd_info_0y$if_long[idx2] <- "dropout"
+
+# Select variables for comparison
+demo_var_compare <- c("age", "sex", "handedness", "ksads_adhd", "if_long")
+data_var_compare <- c(demo_var_compare, mri_var, cbcl_var)
+adhd_info_0y_compare <- select(adhd_info_0y, all_of(data_var_compare))
+
+# Compare groups
+res_0y <- compareGroups(if_long ~ ., data = as.data.table(adhd_info_0y_compare))
+restab_0y <- createTable(res_0y)
+print(restab_0y)
+
+# Export to Word
+export2word(restab_0y, paste0(outpath, "/completer_dropout_demo_diff_0y.docx"))
+```
+
+```{r plot_demo_diff}
+adhd_completer <- filter(adhd_info_0y_compare, if_long == "completer")
+adhd_dropout <- filter(adhd_info_0y_compare, if_long == "dropout")
+
+t.test(adhd_completer$cbcl_scr_syn_attention_t, adhd_dropout$cbcl_scr_syn_attention_t)
+t.test(adhd_completer$cbcl_scr_syn_external_t, adhd_dropout$cbcl_scr_syn_external_t)
+
+p <- ggplot(adhd_info_0y_compare, aes(x = if_long, y = cbcl_scr_syn_attention_t, fill = if_long)) +
+  geom_violin(alpha = 0.4, trim = FALSE) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c("completer" = color_palette[1], "dropout" = color_palette[2])) +
+  scale_x_discrete(labels = c("completer" = "Completer", "dropout" = "Dropout")) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(35, 100), breaks = seq(40, 100, by = 20)) +
+  labs(x = "", y = "CBCL Attention Scores", title = "") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title.y = element_text(size = 20, color = "black"),
+    aspect.ratio = 1.2
+  )
+print(p)
+ggsave(paste0(outpath, "/plot_completer_dropout_attention_diff.png"), 
+       bg = "transparent", plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+
+p <- ggplot(adhd_info_0y_compare, aes(x = if_long, y = cbcl_scr_syn_external_t, fill = if_long)) +
+  geom_violin(alpha = 0.4, width = 0.7, trim = FALSE) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c("completer" = color_palette[1], "dropout" = color_palette[2])) +
+  scale_x_discrete(labels = c("completer" = "Completer", "dropout" = "Dropout")) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(15, 95), breaks = seq(20, 100, by = 20)) +
+  labs(x = "", y = "CBCL Externalizing Scores", title = "") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title.y = element_text(size = 20, color = "black"),
+    aspect.ratio = 1.2
+  )
+print(p)
+ggsave(paste0(outpath, "/plot_completer_dropout_external_diff.png"), 
+       bg = "transparent", plot = p, width = 10, height = 11, units = "cm", dpi = 1200)
+```
+
+### Sankey plot
+```{r sankey_dropout_diagnosis}
+#| fig-width: 10
+#| fig-height: 6
+
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_sankey_networkD3.R")
+
+dat_long_diag <- adhd_info_0y %>%
+  filter(!is.na(if_long), !is.na(ksads_adhd))
+
+p_long_diag <- plot_sankey_networkD3(
+  dat = dat_long_diag,
+  left_var = "if_long", right_var = "ksads_adhd",
+  left_levels = c("completer", "dropout"),
+  right_levels = c("present", "remission", "unspecified"),
+  left_name_map = c(completer = "Completer", dropout = "Dropout"),
+  right_name_map = c(present = "Present", remission = "Partial remission", unspecified = "Unspecified"),
+  left_color_key_map = c(completer = "completer", dropout = "dropout"),
+  right_color_key_map = c(present = "present", remission = "remission", unspecified = "unspecified"),
+  color_map = c(
+    completer = color_palette[1], dropout = color_palette[2],
+    present = "#B8AEDB", remission = "#91C4E8", unspecified = "#F4BE72"
+  ),
+  html_file = "dropout_validation_if_long_vs_ksads_adhd.html",
+  png_file = NULL,
+  pdf_file = NULL,
+  link_alpha = 0.30, node_alpha = 0.95, show_text = TRUE,
+  width = 900, height = 500
+)
+
+# Explicitly return the htmlwidget so it is displayed below the code chunk
+p_long_diag
+```
+
+#### Sankey plot without text
+
+```{r sankey_dropout_diagnosis_notext}
+#| fig-width: 10
+#| fig-height: 6
+
+p_long_diag_notext <- plot_sankey_networkD3(
+  dat = dat_long_diag,
+  left_var = "if_long", right_var = "ksads_adhd",
+  left_levels = c("completer", "dropout"),
+  right_levels = c("present", "remission", "unspecified"),
+  left_name_map = c(completer = "Completer", dropout = "Dropout"),
+  right_name_map = c(present = "Present", remission = "Partial remission", unspecified = "Unspecified"),
+  left_color_key_map = c(completer = "completer", dropout = "dropout"),
+  right_color_key_map = c(present = "present", remission = "remission", unspecified = "unspecified"),
+  color_map = c(
+    completer = color_palette[1], dropout = color_palette[2],
+    present = "#B8AEDB", remission = "#91C4E8", unspecified = "#F4BE72"
+  ),
+  html_file = "dropout_validation_if_long_vs_ksads_adhd_notext.html",
+  png_file = NULL,
+  pdf_file = NULL,
+  link_alpha = 0.30, node_alpha = 0.95, show_text = FALSE,
+  width = 900, height = 500
+)
+
+# Explicitly return the second htmlwidget
+p_long_diag_notext
+```
+
+
+```{r}
+tab_long_diag <- table(dat_long_diag$if_long, dat_long_diag$ksads_adhd)
+
+tab_long_diag
+prop.table(tab_long_diag,margin=1)
+
+chi_long_diag <- chisq.test(tab_long_diag)
+
+chi_long_diag
+
+```
+
+
+## Case-Control Differences
+
+### Whole-Brain Level
+
+```{r define_wholebrain_function}
+
+# Compare whole-brain energy deviation between completers and dropouts
+
+dat_dropout_wholebrain <- data.frame(
+  energy_deviation = unname(adhd_0y_deviation_wholebrain),
+  if_long = adhd_info_0y$if_long
+) %>%
+  filter(!is.na(energy_deviation), !is.na(if_long)) %>%
+  mutate(if_long = factor(if_long, levels = c("completer", "dropout")))
+
+completer_deviation <- dat_dropout_wholebrain %>%
+  filter(if_long == "completer") %>%
+  pull(energy_deviation)
+
+dropout_deviation <- dat_dropout_wholebrain %>%
+  filter(if_long == "dropout") %>%
+  pull(energy_deviation)
+
+n_completer <- length(completer_deviation)
+n_dropout <- length(dropout_deviation)
+
+# Statistical test
+t_stats <- t.test(completer_deviation, dropout_deviation)
+cohens_d_res <- cohens_d(completer_deviation, dropout_deviation)
+
+energy_wholebrain_dropout_stats <- data.frame(
+  comparison = "Completer vs Dropout",
+  n_completer = n_completer,
+  n_dropout = n_dropout,
+  t = unname(t_stats$statistic),
+  p = t_stats$p.value,
+  Cohens_d = cohens_d_res$Cohens_d
+)
+
+write.csv(
+  energy_wholebrain_dropout_stats,
+  file.path(outpath, "energy_wholebrain_dropout_stats.csv"),
+  row.names = FALSE
+)
+
+# Plot, using the same style as {r plot_demo_diff}
+p_dropout_wholebrain <- ggplot(
+  dat_dropout_wholebrain,
+  aes(x = if_long, y = energy_deviation, fill = if_long)
+) +
+  geom_violin(alpha = 0.4, width = 0.7, trim = FALSE) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = c("completer" = color_palette[1], "dropout" = color_palette[2])) +
+  scale_x_discrete(labels = c("completer" = "Completer", "dropout" = "Dropout")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(-3.7, 3.7), breaks = seq(-3, 3, by = 1)) +
+  labs(x = "", y = "Energy Deviation", title = "") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title.y = element_text(size = 20, color = "black"),
+    aspect.ratio = 1.2
+  )
+
+print(energy_wholebrain_dropout_stats)
+print(p_dropout_wholebrain)
+
+ggsave(
+  file.path(outpath, "dropout_wholebrain_boxplot.png"),
+  bg = "transparent",
+  plot = p_dropout_wholebrain,
+  width = 10,
+  height = 11,
+  units = "cm",
+  dpi = 1200
+)
+
+```
+

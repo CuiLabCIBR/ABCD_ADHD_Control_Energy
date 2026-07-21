@@ -1,0 +1,340 @@
+---
+title: "Fig.S8. Clinical characterization of the two ADHD biotypes"
+format:
+  html:
+    toc: true
+    embed-resources: true
+    toc-depth: 2
+    code-fold: false
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(data.table)
+  library(RColorBrewer)
+})
+
+options(warn = -1)
+
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+biotype_colors <- c(biotype1 = color_palette[1], biotype2 = color_palette[2])
+category_colors <- c(
+  present = "#B8AEDB",
+  remission = "#91C4E8",
+  unspecified = "#F4BE72",
+  combined = "#B8AEDB",
+  inattentive = "#91C4E8",
+  hyperactive = "#F4BE72"
+)
+```
+
+## Paths
+
+```{r paths}
+demo_path <- "D:/ABCD/abcd-data-release-5.1/core/"
+project_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy"
+
+paths <- list(
+  biotype = file.path(project_path, "results/all0In_2Back0Back/schaefer400/adhd_biotype_info.csv"),
+  subinfo = file.path(project_path, "data/sub_info/sub_test_info.csv"),
+  ksads = file.path(demo_path, "mental-health/mh_p_ksads_ss.csv"),
+  sankey_fun = file.path(project_path, "functions/plot_sankey_networkD3.R"),
+  output = "adhd_presentation_from_mh_p_ksads_ss_ksads14.csv"
+)
+```
+
+## Helper functions
+
+```{r helper-functions}
+to_num <- function(x) suppressWarnings(as.numeric(x))
+
+count_yes <- function(df, vars, yes_value = 1) {
+  x <- df[, vars, drop = FALSE]
+  x[] <- lapply(x, to_num)
+
+  apply(x, 1, function(v) {
+    if (all(is.na(v))) return(NA_real_)
+    sum(v == yes_value, na.rm = TRUE)
+  })
+}
+
+check_missing_vars <- function(dat, vars) {
+  missing_vars <- setdiff(vars, colnames(dat))
+  if (length(missing_vars) > 0) {
+    stop("These KSADS variables are missing from dat:\n", paste(missing_vars, collapse = "\n"))
+  }
+}
+
+make_count_table <- function(x) table(x, useNA = "ifany")
+
+run_chisq <- function(dat, row_var, col_var) {
+  tab <- table(dat[[row_var]], dat[[col_var]])
+  list(
+    count = tab,
+    proportion = prop.table(tab, margin = 1),
+    test = chisq.test(tab)
+  )
+}
+```
+
+## Load data
+
+```{r load-data}
+adhd_biotype <- fread(paths$biotype)
+adhd_621 <- fread(paths$subinfo) %>%
+  filter(eventname == "baseline_year_1_arm_1", diagnosis == "adhd")
+
+if (all(c("src_subject_id", "eventname") %in% colnames(adhd_biotype))) {
+  adhd_621 <- adhd_621 %>%
+    left_join(
+      adhd_biotype %>% select(src_subject_id, eventname, biotype),
+      by = c("src_subject_id", "eventname")
+    )
+} else {
+  adhd_621$biotype <- adhd_biotype$biotype
+}
+
+make_count_table(adhd_621$biotype)
+
+ksads_raw <- fread(paths$ksads)
+
+ksads_dat <- ksads_raw %>%
+  semi_join(adhd_621, by = c("src_subject_id", "eventname")) %>%
+  as.data.frame()
+```
+
+## Derive ADHD presentation
+
+```{r symptom-variables}
+current_inatt <- c(
+  "ksads_14_394_p", "ksads_14_76_p", "ksads_14_395_p",
+  "ksads_14_396_p", "ksads_14_397_p", "ksads_14_398_p",
+  "ksads_14_399_p", "ksads_14_80_p", "ksads_14_400_p"
+)
+
+current_hyper <- c(
+  "ksads_14_401_p", "ksads_14_84_p", "ksads_14_402_p",
+  "ksads_14_403_p", "ksads_14_404_p", "ksads_14_405_p",
+  "ksads_14_406_p", "ksads_14_407_p", "ksads_14_408_p"
+)
+
+onset_before_12_var <- "ksads_14_429_p"
+impairment_var <- "ksads_14_409_p"
+needed_vars <- c(current_inatt, current_hyper, onset_before_12_var, impairment_var)
+
+check_missing_vars(ksads_dat, needed_vars)
+```
+
+```{r derive-presentation}
+present_labels <- c(
+  "ADHD predominantly inattentive presentation",
+  "ADHD predominantly hyperactive/impulsive presentation",
+  "ADHD combined presentation"
+)
+
+result <- ksads_dat %>%
+  mutate(
+    current_inatt_n = count_yes(., current_inatt),
+    current_hyper_n = count_yes(., current_hyper),
+    onset_before_12 = to_num(.data[[onset_before_12_var]]),
+    impairment_meets = to_num(.data[[impairment_var]]) == 1,
+    inatt_meets = current_inatt_n >= 6,
+    hyper_meets = current_hyper_n >= 6,
+    adhd_presentation = case_when(
+      is.na(inatt_meets) | is.na(hyper_meets) |
+        is.na(onset_before_12) | is.na(impairment_meets) ~ NA_character_,
+      inatt_meets & !hyper_meets & onset_before_12 == 1 & impairment_meets ~
+        "ADHD predominantly inattentive presentation",
+      !inatt_meets & hyper_meets & onset_before_12 == 1 & impairment_meets ~
+        "ADHD predominantly hyperactive/impulsive presentation",
+      inatt_meets & hyper_meets & onset_before_12 == 1 & impairment_meets ~
+        "ADHD combined presentation",
+      TRUE ~ "No current ADHD diagnosis"
+    ),
+    adhd_diagnosis = if_else(adhd_presentation %in% present_labels, 1, 0),
+    adhd_subtype_code = case_when(
+      adhd_presentation == "ADHD combined presentation" ~ 1,
+      adhd_presentation == "ADHD predominantly inattentive presentation" ~ 2,
+      adhd_presentation == "ADHD predominantly hyperactive/impulsive presentation" ~ 3,
+      adhd_presentation == "No current ADHD diagnosis" ~ 0,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  select(
+    src_subject_id, eventname,
+    current_inatt_n, current_hyper_n,
+    onset_before_12, impairment_meets,
+    inatt_meets, hyper_meets,
+    adhd_diagnosis, adhd_presentation, adhd_subtype_code
+  ) %>%
+  left_join(
+    adhd_621 %>% select(src_subject_id, eventname, ksads_adhd, biotype, age, sex),
+    by = c("src_subject_id", "eventname")
+  )
+
+write.csv(result, paths$output, row.names = FALSE)
+```
+
+## Descriptive tables
+
+```{r descriptive-tables}
+list(
+  presentation = make_count_table(result$adhd_presentation),
+  subtype_code = make_count_table(result$adhd_subtype_code),
+  biotype = make_count_table(result$biotype),
+  onset_before_12 = make_count_table(result$onset_before_12),
+  impairment_meets = make_count_table(result$impairment_meets),
+  inatt_meets = make_count_table(result$inatt_meets),
+  hyper_meets = make_count_table(result$hyper_meets),
+  biotype_by_presentation = table(result$biotype, result$adhd_presentation, useNA = "ifany"),
+  biotype_by_presentation_prop = prop.table(table(result$biotype, result$adhd_presentation), margin = 1)
+)
+```
+
+## Categorical comparisons
+
+```{r categorical-comparisons}
+dat_diag <- result %>%
+  filter(!is.na(biotype), !is.na(ksads_adhd)) %>%
+  mutate(biotype = factor(biotype), ksads_adhd = factor(ksads_adhd))
+
+diag_stats <- run_chisq(dat_diag, "biotype", "ksads_adhd")
+diag_stats$count
+diag_stats$proportion
+diag_stats$test
+
+present_dat <- result %>%
+  filter(
+    !is.na(biotype),
+    !is.na(ksads_adhd),
+    !is.na(adhd_presentation),
+    ksads_adhd == "present",
+    adhd_presentation != "No current ADHD diagnosis"
+  ) %>%
+  mutate(biotype = factor(biotype), adhd_presentation = factor(adhd_presentation))
+
+presentation_stats <- run_chisq(present_dat, "biotype", "adhd_presentation")
+presentation_stats$count
+presentation_stats$proportion
+presentation_stats$test
+```
+
+## Sankey plots
+
+```{r sankey-functions}
+source(paths$sankey_fun)
+
+sankey_defaults <- list(
+  pdf_file = NULL,
+  link_alpha = 0.30,
+  node_alpha = 0.95,
+  font_size = 22,
+  node_width = 22,
+  node_padding = 28,
+  width = 900,
+  height = 500,
+  zoom = 2
+)
+
+make_sankey_pair <- function(config) {
+  dat_plot <- config$dat %>%
+    filter(!is.na(.data[[config$left_var]]), !is.na(.data[[config$right_var]]))
+
+  common_args <- c(
+    list(
+      dat = dat_plot,
+      left_var = config$left_var,
+      right_var = config$right_var,
+      left_levels = config$left_levels,
+      right_levels = config$right_levels,
+      left_name_map = config$left_name_map,
+      right_name_map = config$right_name_map,
+      left_color_key_map = config$left_color_key_map,
+      right_color_key_map = config$right_color_key_map,
+      color_map = config$color_map
+    ),
+    sankey_defaults
+  )
+
+  with_text <- do.call(
+    plot_sankey_networkD3,
+    modifyList(common_args, list(
+      html_file = paste0(config$file_prefix, ".html"),
+      png_file = NULL,
+      show_text = TRUE
+    ))
+  )
+
+  without_text <- do.call(
+    plot_sankey_networkD3,
+    modifyList(common_args, list(
+      html_file = paste0(config$file_prefix, "_notext.html"),
+      png_file = NULL,
+      show_text = FALSE
+    ))
+  )
+
+  list(with_text = with_text, without_text = without_text)
+}
+```
+
+```{r sankey-configs}
+biotype_name_map <- c(biotype1 = "ADHD-1", biotype2 = "ADHD-2")
+biotype_key_map <- c(biotype1 = "biotype1", biotype2 = "biotype2")
+
+sankey_configs <- list(
+  diagnosis = list(
+    dat = result,
+    left_var = "biotype",
+    right_var = "ksads_adhd",
+    left_levels = c("biotype1", "biotype2"),
+    right_levels = c("present", "remission", "unspecified"),
+    left_name_map = biotype_name_map,
+    right_name_map = c(present = "Present", remission = "Remission", unspecified = "Unspecified"),
+    left_color_key_map = biotype_key_map,
+    right_color_key_map = c(present = "present", remission = "remission", unspecified = "unspecified"),
+    color_map = c(biotype_colors, category_colors[c("present", "remission", "unspecified")]),
+    file_prefix = "biotypes_vs_diagnostic_labels"
+  ),
+  presentation = list(
+    dat = present_dat,
+    left_var = "biotype",
+    right_var = "adhd_presentation",
+    left_levels = c("biotype1", "biotype2"),
+    right_levels = c(
+      "ADHD combined presentation",
+      "ADHD predominantly inattentive presentation",
+      "ADHD predominantly hyperactive/impulsive presentation"
+    ),
+    left_name_map = biotype_name_map,
+    right_name_map = c(
+      "ADHD combined presentation" = "Combined",
+      "ADHD predominantly inattentive presentation" = "Inattentive",
+      "ADHD predominantly hyperactive/impulsive presentation" = "Hyperactive/impulsive"
+    ),
+    left_color_key_map = biotype_key_map,
+    right_color_key_map = c(
+      "ADHD combined presentation" = "combined",
+      "ADHD predominantly inattentive presentation" = "inattentive",
+      "ADHD predominantly hyperactive/impulsive presentation" = "hyperactive"
+    ),
+    color_map = c(biotype_colors, category_colors[c("combined", "inattentive", "hyperactive")]),
+    file_prefix = "biotypes_vs_adhd_presentations"
+  )
+)
+```
+
+```{r run-sankey}
+sankey_plots <- lapply(sankey_configs, make_sankey_pair)
+
+# Each widget is printed explicitly so that it is embedded in the rendered HTML.
+sankey_plots$diagnosis$with_text
+sankey_plots$diagnosis$without_text
+sankey_plots$presentation$with_text
+sankey_plots$presentation$without_text
+```

@@ -1,0 +1,215 @@
+---
+title: "ADHD Energy Deviation Longitudinal Analysis"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-01-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(data.table)
+  library(compareGroups)
+  library(scales)
+  library(RColorBrewer)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+
+# Define color palette
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+```
+
+## Data Preparation
+
+```{r load_data}
+# Load energy deviation data
+load(file.path(outpath, "energy_deviation.RData"))
+
+# Load demographic and biotype information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+# Merge biotype information
+biotype_info <- read.csv(paste0(outpath, "/adhd_biotype_info.csv"))
+sub_test_info <- merge(sub_test_info, biotype_info[, c("src_subject_id", "biotype")], by = "src_subject_id", all.x = TRUE)
+sub_test_info$W_scores_wholebrain <- W_scores_wholebrain
+```
+
+## Data Analysis
+
+```{r prepare_longitudinal_data}
+# Define CBCL variables
+cbcl_vars <- c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")
+
+# Identify ADHD subjects at baseline with 2-year follow-up data
+sub_adhd_0y <- sub_test_info %>% 
+  filter(diagnosis == "adhd" & eventname == "baseline_year_1_arm_1") %>%
+  pull(src_subject_id)
+
+adhd_long_data <- sub_test_info %>%
+  filter(src_subject_id %in% sub_adhd_0y) %>%
+  group_by(src_subject_id) %>%
+  filter(n() == 2) %>%
+  ungroup() %>%
+  mutate(eventname = factor(eventname, levels = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")))
+```
+
+```{r plot_longitudinal}
+# Visualize energy deviation trajectory by biotype
+p <- ggplot(adhd_long_data, aes(x = eventname, y = W_scores_wholebrain)) +
+  geom_boxplot(aes(fill = biotype), width = 0.8, alpha = 0.4, outlier.shape = NA) +
+  geom_point(width = 0.15, size = 1.5) +
+  geom_line(aes(group = src_subject_id), color = "gray", linetype = "dashed") +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", linewidth = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black", stroke = 1) +
+  scale_fill_manual(values = color_palette) +
+  scale_x_discrete(
+    labels = c("baseline_year_1_arm_1" = "baseline", "2_year_follow_up_y_arm_1" = "2-year"),
+    limits = c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1")
+  ) +
+  facet_wrap(~ biotype) +
+  labs(x = "", y = "Energy Deviation", title = "") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    title = element_text(size = 16), # 18
+    strip.text = element_blank(),   # hide facet labels
+    axis.text = element_text(size = 16, color = "black"),
+    axis.title = element_text(size = 16),
+    aspect.ratio = 1.35 # 1.47
+  )
+
+
+print(p)
+
+ggsave(file.path(outpath, "adhd_longitudinal_energy_diff.png"), plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+```
+
+```{r paired_ttest_biotype1}
+# Paired t-test for biotype1
+adhd_biotype1_0y <- adhd_long_data %>% 
+  filter(biotype == "biotype1" & eventname == "baseline_year_1_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+adhd_biotype1_2y <- adhd_long_data %>% 
+  filter(biotype == "biotype1" & eventname == "2_year_follow_up_y_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+t_stats_biotype1 <- t.test(adhd_biotype1_2y$W_scores_wholebrain, adhd_biotype1_0y$W_scores_wholebrain, paired = TRUE)
+print(t_stats_biotype1)
+```
+
+```{r paired_ttest_biotype2}
+# Paired t-test for biotype2
+adhd_biotype2_0y <- adhd_long_data %>% 
+  filter(biotype == "biotype2" & eventname == "baseline_year_1_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+adhd_biotype2_2y <- adhd_long_data %>% 
+  filter(biotype == "biotype2" & eventname == "2_year_follow_up_y_arm_1") %>% 
+  select(W_scores_wholebrain, all_of(cbcl_vars))
+
+t_stats_biotype2 <- t.test(adhd_biotype2_2y$W_scores_wholebrain, adhd_biotype2_0y$W_scores_wholebrain, paired = TRUE)
+print(t_stats_biotype2)
+```
+
+```{r correlate_change_biotype1}
+# Calculate change scores and correlate with CBCL changes - Biotype1
+biotype1_diff <- adhd_biotype1_2y - adhd_biotype1_0y
+corr.test(biotype1_diff[, "W_scores_wholebrain"], 
+          biotype1_diff[, c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")])
+```
+
+```{r correlate_change_biotype2}
+# Calculate change scores and correlate with CBCL changes - Biotype2
+biotype2_diff <- adhd_biotype2_2y - adhd_biotype2_0y
+corr.test(biotype2_diff[, "W_scores_wholebrain"], 
+          biotype2_diff[, c("cbcl_scr_syn_attention_t", "cbcl_scr_syn_external_t")])
+```
+
+```{r plot_corr_attention}
+# Scatter plot: Energy deviation change vs attention score change (Biotype2)
+corr_results <- corr.test(biotype2_diff[, "W_scores_wholebrain"], biotype2_diff[, "cbcl_scr_syn_attention_t"])
+title_text <- paste("r =", round(corr_results$r, 2), ", p =", format.pval(corr_results$p, digits = 3))
+cat(title_text)
+
+p <- ggplot(biotype2_diff, aes(x = W_scores_wholebrain, y = cbcl_scr_syn_attention_t)) + 
+  geom_point() +
+  geom_smooth(method = lm, color = color_palette[2]) +
+  labs(x = "ΔEnergy deviation", y = "ΔAttention probelm scores") +
+  theme_classic() + 
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12),
+    strip.text = element_text(size = 18),
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    axis.title.x = element_text(margin = margin(t = 8)),
+    aspect.ratio = 0.8
+  )
+
+print(p)
+ggsave(file.path(outpath, "corr_energy_diff_attention_diff.png"), plot = p, width = 12, height = 11, units = "cm", dpi = 1200)
+```
+
+```{r plot_corr_external}
+# Scatter plot: Energy deviation change vs external score change (Biotype2)
+corr_results <- corr.test(biotype2_diff[, "W_scores_wholebrain"], biotype2_diff[, "cbcl_scr_syn_external_t"])
+title_text <- paste("r =", round(corr_results$r, 2), ", p =", format.pval(corr_results$p, digits = 3))
+cat(title_text)
+
+p <- ggplot(biotype2_diff, aes(x = W_scores_wholebrain, y = cbcl_scr_syn_external_t)) + 
+  geom_point() +
+  geom_smooth(method = lm, color = color_palette[2]) +
+  labs(x = "ΔEnergy deviation", y = "ΔExternalizing problem scores") +
+  theme_classic() + 
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12),
+    strip.text = element_text(size = 18),
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    axis.title.x = element_text(margin = margin(t = 8)),
+    aspect.ratio = 0.8
+  )
+
+print(p)
+ggsave(file.path(outpath, "corr_energy_diff_external_diff.png"), plot = p, width = 12, height = 11, units = "cm", dpi = 1200)
+```

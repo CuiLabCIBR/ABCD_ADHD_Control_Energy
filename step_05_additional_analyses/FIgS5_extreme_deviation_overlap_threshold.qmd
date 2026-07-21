@@ -1,0 +1,318 @@
+---
+title: "Fig.S5. Regional extreme deviation overlap across thresholds"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-04-26"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggradar)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(SNFtool)
+  library(data.table)
+  library(scales)
+  library(knitr)
+  library(kableExtra)
+  library(RColorBrewer)
+  library(compareGroups)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface_thr.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+# task_contrast <- "0Back_2Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+
+# Define color palettes
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+network_names <- c("VS", "SM", "DA", "VA", "LM", "FP", "DM", "SC")
+```
+
+## Data Preparation
+
+```{r load_subject_info}
+# Load demographic information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+# Define variable groups
+demo_var <- c("src_subject_id", "eventname", "age", "sex", "race", "handedness", 
+              "diagnosis", "usage", "ksads_adhd")
+mri_var <- c("mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_var <- sub_demo_info %>% 
+  select(starts_with("cbcl") | starts_with("nihtbx") | starts_with("tfmri")) %>%
+  colnames()
+
+# Select relevant variables and convert to factors
+sub_demo_info <- sub_demo_info %>% select(all_of(c(demo_var, mri_var, behav_var)))
+factor_var <- c("sex", "race", "handedness", "diagnosis")
+sub_demo_info[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+# Remove subjects with missing usage information
+idx_nonNA <- which(!is.na(sub_demo_info$usage))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+# # Split into train and test sets
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+```
+
+## Data Analysis
+
+### Energy Calculation
+
+```{r calculate_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_data <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_roi <- energy_data$ROI[idx_nonNA, ]
+energy_network <- energy_data$NetAvg[idx_nonNA, ]
+energy_wholebrain <- as.data.frame(energy_data$WholeBrain[idx_nonNA, ])
+colnames(energy_wholebrain) <- "WholeBrain"
+
+roi_num <- ncol(energy_roi)
+cortex_num <- roi_num - 52  # 52 subcortical ROIs
+```
+
+## Energy Deviation
+
+```{r calculate_w_scores}
+# Define covariates for W-score calculation
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_data <- sub_demo_info[, ..covariates]
+
+# Define indices for train, test, and baseline groups
+train_idx <- which(sub_demo_info$usage == "train")
+test_idx <- which(sub_demo_info$usage == "test")
+adhd_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "adhd")
+td_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "td")
+
+# Calculate W-scores at whole-brain level
+lm_data <- cbind(energy_wholebrain, behav_data)
+W_scores_wholebrain <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_wholebrain <- W_scores_wholebrain[adhd_0y_idx, ]
+td_0y_deviation_wholebrain <- W_scores_wholebrain[td_0y_idx, ]
+
+# Calculate W-scores at network level
+lm_data <- cbind(energy_network, behav_data)
+W_scores_network <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_network <- W_scores_network[adhd_0y_idx, ]
+td_0y_deviation_network <- W_scores_network[td_0y_idx, ]
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+W_scores_roi <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_roi <- W_scores_roi[adhd_0y_idx, ]
+td_0y_deviation_roi <- W_scores_roi[td_0y_idx, ]
+```
+
+### Extreme Deviation
+
+```{r}
+library(ggplot2)
+
+W_thr_list <- seq(1,2.6,by = 0.2)
+
+result <- data.frame(
+  W_thr = W_thr_list,
+  max_pos_pct = NA,
+  max_neg_pct = NA
+)
+
+for(i in seq_along(W_thr_list)){
+  
+  W_thr <- W_thr_list[i]
+  
+  adhd_pos_deviation <- adhd_0y_deviation_roi > W_thr
+  adhd_pos_deviation_pct <- colMeans(adhd_pos_deviation, na.rm = TRUE) * 100
+  result$max_pos_pct[i] <- max(adhd_pos_deviation_pct, na.rm = TRUE)
+  
+  adhd_neg_deviation <- adhd_0y_deviation_roi < -W_thr
+  adhd_neg_deviation_pct <- colMeans(adhd_neg_deviation, na.rm = TRUE) * 100
+  result$max_neg_pct[i] <- max(adhd_neg_deviation_pct, na.rm = TRUE)
+}
+
+print(result)
+
+p <- ggplot(result, aes(x = W_thr)) +
+  geom_line(aes(y = max_pos_pct, color = "Positive deviation"), linewidth = 1) +
+  geom_point(aes(y = max_pos_pct, color = "Positive deviation"), size = 2) +
+  geom_line(aes(y = max_neg_pct, color = "Negative deviation"), linewidth = 1) +
+  geom_point(aes(y = max_neg_pct, color = "Negative deviation"), size = 2) +
+  scale_color_manual(
+    values = c(
+      "Positive deviation" = color_palette[2],
+      "Negative deviation" = color_palette[1]
+    )
+  ) +
+  scale_x_continuous(breaks = W_thr_list) +
+  labs(
+    x = "W-score threshold",
+    y = "max(Extreme deviation overlap %)",
+    color = ""
+  ) + theme_classic() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 14, color = "black"),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(size = 14, color = "black"))
+
+print(p)
+ggsave(paste0(outpath, "/plot_wscore_thr_range.png"), bg = "transparent", 
+       plot = p, width = 11, height = 9, units = "cm", dpi = 1200)
+```
+
+```{r identify_extreme_deviations}
+# Define threshold for extreme deviation
+W_thr <- 2
+
+adhd_pos_deviation <- adhd_0y_deviation_roi > W_thr
+adhd_pos_deviation_pct <- colMeans(adhd_pos_deviation) * 100
+
+adhd_neg_deviation <- adhd_0y_deviation_roi < -W_thr
+adhd_neg_deviation_pct <- colMeans(adhd_neg_deviation) * 100
+
+```
+
+
+```{r plot_deviation_brainmaps}
+# Load atlas labels
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_region_labels.csv"))
+schaefer_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+
+# Positive deviation brain map
+cmap_r <- rev(c("#A63726", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7"))
+print(max(adhd_pos_deviation_pct))
+brain_plot_data <- data.frame(label = atlas_label$label, deviation = unname(adhd_pos_deviation_pct[1:cortex_num]))
+p <- ggplot() +
+  geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+             mapping = aes(fill = deviation, colour = deviation), show.legend = FALSE, position = position_brain(hemi~side)) +
+  scale_fill_gradientn(colours = cmap_r, limits = c(0, 8), oob = squish) +
+  theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+print(p)
+ggsave(paste0(outpath, "/adhd_pos_deviation_pct_thr2.png"), bg = "transparent", plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+
+# Negative deviation brain map
+cmap_b <- c("#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2C678C")
+print(max(adhd_neg_deviation_pct))
+brain_plot_data <- data.frame(label = atlas_label, deviation = adhd_neg_deviation_pct[1:cortex_num])
+p <- ggplot() +
+  geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+             mapping = aes(fill = deviation, colour = deviation), show.legend = FALSE, position = position_brain(hemi~side)) +
+  scale_fill_gradientn(colours = cmap_b, limits = c(0, 7), oob = squish) +
+  theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+print(p)
+ggsave(paste0(outpath, "/adhd_neg_deviation_pct_thr2.png"), bg = "transparent", plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+```
+
+## Biotype Clustering
+
+### K-means Clustering
+```{r K-means clustering}
+set.seed(123456)
+clust_data <- adhd_0y_deviation_roi
+kmeans_result <- kmeans(clust_data, centers = 2, nstart = 100)
+clust <- kmeans_result$cluster
+table(clust)
+
+simil_matrix <- proxy::simil(clust_data, method = "correlation")
+dist_matrix <- 1 - as.matrix(simil_matrix)
+diag(dist_matrix) <- 0
+sigma <- median(dist_matrix[lower.tri(dist_matrix)])
+affinity_matrix <- exp(-dist_matrix^2 / sigma^2)
+affinity_matrix <- as.matrix(affinity_matrix)
+
+dist_matrix <- as.matrix(dist(clust_data))
+```
+
+```{r}
+
+# 按cluster重新排序：前面是cluster 1，后面是cluster 2
+ord <- order(clust)
+clust_ord <- clust[ord]
+simil_ord <- dist_matrix[ord, ord]
+
+table(clust_ord)
+
+# cluster 1和cluster 2的样本数量
+n1 <- sum(clust_ord == 1)
+n2 <- sum(clust_ord == 2)
+
+# 提取cluster 1内部相似性
+simil_clust1 <- simil_ord[1:n1, 1:n1]
+within_clust1 <- simil_clust1[upper.tri(simil_clust1)]
+
+# 提取cluster 2内部相似性
+simil_clust2 <- simil_ord[(n1 + 1):(n1 + n2), (n1 + 1):(n1 + n2)]
+within_clust2 <- simil_clust2[upper.tri(simil_clust2)]
+
+# 提取cluster间相似性
+between_clust <- simil_ord[1:n1, (n1 + 1):(n1 + n2)]
+between_clust <- as.vector(between_clust)
+
+# 汇总
+simil_summary <- data.frame(
+  comparison = c("within_cluster1", "within_cluster2", "between_clusters"),
+  n = c(length(within_clust1), length(within_clust2), length(between_clust)),
+  mean_similarity = c(
+    mean(within_clust1, na.rm = TRUE),
+    mean(within_clust2, na.rm = TRUE),
+    mean(between_clust, na.rm = TRUE)
+  ),
+  sd_similarity = c(
+    sd(within_clust1, na.rm = TRUE),
+    sd(within_clust2, na.rm = TRUE),
+    sd(between_clust, na.rm = TRUE)
+  ),
+  median_similarity = c(
+    median(within_clust1, na.rm = TRUE),
+    median(within_clust2, na.rm = TRUE),
+    median(between_clust, na.rm = TRUE)
+  )
+)
+
+simil_summary
+```
+

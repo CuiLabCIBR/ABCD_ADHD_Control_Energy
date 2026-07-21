@@ -1,0 +1,340 @@
+---
+title: "Fig.S6. Robustness analyses of head motion effects on ADHD energy deviations"
+author:
+  - name: Hang Yang
+    orcid: 0000-0002-7349-3366
+    email: yanghang@cibr.ac.cn
+    url: https://scholar.google.com/citations?user=LqI72qAAAAAJ&hl
+    affiliation: 
+      - name: Chinese Institute for Brain Research, Beijing (CIBR)
+        group: CUIZAIXU Lab
+        url: https://cuilab.cibr.ac.cn/
+date: "2026-04-26"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    theme: Materia
+    toc: true
+    toc_depth: 3
+    toc-expand: 1
+    toc_float: true
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(psych)
+  library(effectsize)
+  library(ggplot2)
+  library(ggradar)
+  library(ggseg)
+  library(ggsegSchaefer)
+  library(data.table)
+  library(scales)
+  library(knitr)
+  library(kableExtra)
+  library(RColorBrewer)
+  library(compareGroups)
+})
+
+rm(list = ls())
+options(warn = -1)
+
+# Source custom functions
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/energy_summary_combat.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/plot_surface_thr.R")
+source("F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/functions/calc_w_scores.R")
+
+# Define paths and parameters
+root_path <- "F:/Cui_Lab/Projects/ABCD_ADHD_Control_Energy/"
+behav_path <- paste0(root_path, "data/sub_info/")
+task_contrast <- "all0In_2Back0Back"
+atlas <- "schaefer400"
+combat_type <- "combat"
+energy_norm <- "control_energy"
+outpath <- file.path(root_path, "results", task_contrast, atlas)
+dir.create(outpath, recursive = TRUE, showWarnings = FALSE)
+
+# Define color palettes
+color_palette <- rev(brewer.pal(n = 3, name = "RdBu"))[c(1, 3)]
+network_names <- c("VS", "SM", "DA", "VA", "LM", "FP", "DM", "SC")
+```
+
+## Data Preparation
+
+```{r load_subject_info}
+# Load demographic information
+sub_demo_info <- fread(paste0(behav_path, "sub_demo_info_train_test.csv"), na.strings = c("", "NA"))
+
+# Define variable groups
+demo_var <- c("src_subject_id", "eventname", "age", "sex", "race", "handedness", 
+              "diagnosis", "usage", "ksads_adhd")
+mri_var <- c("mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_var <- sub_demo_info %>% 
+  select(starts_with("cbcl") | starts_with("nihtbx") | starts_with("tfmri")) %>%
+  colnames()
+
+# Select relevant variables and convert to factors
+sub_demo_info <- sub_demo_info %>% select(all_of(c(demo_var, mri_var, behav_var)))
+factor_var <- c("sex", "race", "handedness", "diagnosis")
+sub_demo_info[, (factor_var) := lapply(.SD, as.factor), .SDcols = factor_var]
+
+# Remove subjects with missing usage information
+idx_nonNA <- which(!is.na(sub_demo_info$usage))
+sub_demo_info <- sub_demo_info[idx_nonNA, ]
+
+# # Split into train and test sets
+sub_test_info <- filter(sub_demo_info, usage == "test")
+sub_train_info <- filter(sub_demo_info, usage == "train")
+
+```
+
+```{r}
+adhd_0y_info <- sub_test_info %>% 
+  filter(eventname == "baseline_year_1_arm_1", diagnosis == "adhd")
+adhd_0y_fd <- adhd_0y_info$mean_fd
+
+td_train_0y_info <- sub_train_info %>% 
+  filter(eventname == "baseline_year_1_arm_1", diagnosis == "td")
+td_train_0y_fd <- td_train_0y_info$mean_fd
+
+td_test_0y_info <- sub_test_info %>% 
+  filter(eventname == "baseline_year_1_arm_1", diagnosis == "td")
+td_test_0y_fd <- td_test_0y_info$mean_fd
+
+describe(adhd_0y_fd)
+describe(td_train_0y_fd)
+t.test(adhd_0y_fd, td_train_0y_fd)
+```
+
+
+## Data Analysis
+
+### Energy Calculation
+
+```{r calculate_energy}
+# Calculate control energy at whole-brain, network, and regional levels
+energy_data <- energy_summary(root_path, task_contrast, atlas = atlas, combat = combat_type, energy_norm = energy_norm)
+energy_roi <- energy_data$ROI[idx_nonNA, ]
+energy_network <- energy_data$NetAvg[idx_nonNA, ]
+energy_wholebrain <- as.data.frame(energy_data$WholeBrain[idx_nonNA, ])
+colnames(energy_wholebrain) <- "WholeBrain"
+
+roi_num <- ncol(energy_roi)
+cortex_num <- roi_num - 52  # 52 subcortical ROIs
+```
+
+## Energy Deviation
+
+```{r calculate_w_scores}
+# Define covariates for W-score calculation
+covariates <- c("age", "sex", "handedness", "mean_fd", "TBV", paste0("network_strength_", atlas))
+behav_data <- sub_demo_info[, ..covariates]
+
+# Define indices for train, test, and baseline groups
+train_idx <- which(sub_demo_info$usage == "train")
+test_idx <- which(sub_demo_info$usage == "test")
+adhd_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "adhd")
+td_0y_idx <- which(sub_test_info$eventname == "baseline_year_1_arm_1" & sub_test_info$diagnosis == "td")
+
+# Calculate W-scores at whole-brain level
+lm_data <- cbind(energy_wholebrain, behav_data)
+W_scores_wholebrain <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_wholebrain <- W_scores_wholebrain[adhd_0y_idx, ]
+td_0y_deviation_wholebrain <- W_scores_wholebrain[td_0y_idx, ]
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+W_scores_roi <- calc_w_scores(lm_data[train_idx, ], lm_data[test_idx, ], covariates)
+adhd_0y_deviation_roi <- W_scores_roi[adhd_0y_idx, ]
+td_0y_deviation_roi <- W_scores_roi[td_0y_idx, ]
+```
+
+
+```{r}
+all_0y_fd <- c(adhd_0y_fd, td_test_0y_fd)
+all_deviation_wholebrain <- c(adhd_0y_deviation_wholebrain, td_0y_deviation_wholebrain)
+
+cor_results <- list(
+  "ADHD: FD vs whole-brain deviation" = cor.test(adhd_0y_fd, adhd_0y_deviation_wholebrain),
+  "TD: FD vs whole-brain deviation" = cor.test(td_test_0y_fd, td_0y_deviation_wholebrain),
+  "All: FD vs whole-brain deviation" = cor.test(c(adhd_0y_fd, td_test_0y_fd), c(adhd_0y_deviation_wholebrain, td_0y_deviation_wholebrain))
+)
+
+data.frame(
+  type = names(cor_results),
+  r = sapply(cor_results, \(x) unname(x$estimate)),
+  p = sapply(cor_results, \(x) x$p.value)
+)
+```
+
+
+
+```{r plot_corrl}
+# Scatter plot:
+fd_deviation <- data.frame(fd = adhd_0y_fd, deviation = adhd_0y_deviation_wholebrain)
+
+p <- ggplot(fd_deviation, aes(x = adhd_0y_deviation_wholebrain, y = adhd_0y_fd)) + 
+  geom_point() +
+  geom_smooth(method = lm, color = "black") +
+  labs(x = "Energy deviation", y = "Head motion") +
+  theme_classic() + 
+  theme(
+    strip.text = element_text(size = 18),
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18),
+    axis.title.x = element_text(margin = margin(t = 8)),
+    aspect.ratio = 0.9
+  )
+
+print(p)
+ggsave(file.path(outpath, "corr_fd_deviation_adhd_0y.png"), 
+       plot = p, width = 9, height = 9, units = "cm", dpi = 1200)
+```
+
+
+```{r}
+library(MatchIt)
+# get the baseline data
+adhd_0y <- sub_demo_info %>% 
+  filter(diagnosis == "adhd" & eventname == "baseline_year_1_arm_1") %>% 
+  select(src_subject_id, eventname, age, sex, handedness, diagnosis, mean_fd, TBV, network_strength_schaefer400)
+adhd_0y$treat <- 1
+
+td_0y <- sub_demo_info %>%
+  filter(diagnosis == "td" & eventname == "baseline_year_1_arm_1") %>%
+  select(src_subject_id, eventname, age, sex, handedness, diagnosis, mean_fd, TBV, network_strength_schaefer400)
+td_0y$treat <- 0
+
+sub_0y <- rbind(adhd_0y, td_0y)
+
+# propensity score matching (PSM)
+ps_match <- matchit(treat ~ age + sex + handedness + mean_fd + TBV + network_strength_schaefer400, 
+                    data = sub_0y, method = "nearest", distance = "glm", ratio = 2)
+# summary(ps_match)
+
+sub_0y_matched <- match.data(ps_match)
+td_0y_train <- sub_0y_matched %>% filter(treat == 0)
+t.test(adhd_0y$mean_fd, td_0y_train$mean_fd)
+
+```
+```{r}
+td_0y_train_idx <- which(sub_demo_info$src_subject_id %in% td_0y_train$src_subject_id & 
+                           sub_demo_info$eventname == "baseline_year_1_arm_1")
+
+adhd_0y_test_idx <- which(sub_demo_info$eventname == "baseline_year_1_arm_1" & sub_demo_info$diagnosis == "adhd")
+
+# Calculate W-scores at ROI level
+lm_data <- cbind(energy_roi, behav_data)
+adhd_0y_deviation_roi_fd_matched <- calc_w_scores(lm_data[td_0y_train_idx, ], lm_data[adhd_0y_test_idx, ], covariates)
+
+sub_cor <- sapply(1:nrow(adhd_0y_deviation_roi), function(i) {
+  cor(as.numeric(adhd_0y_deviation_roi[i, ]), as.numeric(adhd_0y_deviation_roi_fd_matched[i, ]), 
+      use = "pairwise.complete.obs")
+})
+
+```
+
+
+
+```{r plot_cor_distribution}
+library(gghalves)
+library(ggplot2)
+library(dplyr)
+
+# Prepare data (sub_cor is a numeric vector)
+df_plot <- data.frame(
+  Group = factor("pearson_r", levels = "pearson_r"),
+  sub_cor = sub_cor
+)
+
+# Color palette (use your existing ones if you want)
+color_palette <- c("#87B2D3")
+color_palette_dark <- c("#5A8DB0")
+
+# Plot sub_cor (single group)
+p_plot <- ggplot(df_plot, aes(x = Group, y = sub_cor, fill = Group, color = Group)) +
+  geom_half_violin(side = "r", alpha = 0.9, trim = FALSE, linewidth = 0.5) +
+  geom_half_point(side = "l", range_scale = 0.5, size = 1, alpha = 0.3) +
+  geom_boxplot(width = 0.1, outlier.shape = NA, fill = NA, alpha = 0.9, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3,
+               fill = "white", color = "black", stroke = 1) +
+  labs(title = NULL, x = NULL, y = "Within-subject similarity") +
+  scale_fill_manual(values = setNames(color_palette, "pearson_r")) +
+  scale_color_manual(values = setNames(color_palette_dark, "pearson_r")) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 16.5, color = "black"),
+    axis.title = element_text(size = 16.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = "none",
+    aspect.ratio = 1
+  )
+
+plot(p_plot)
+
+ggsave(paste0(outpath, "/sub_cor_fd_matched.png"), bg = "transparent", 
+       plot = p_plot, width = 10, height = 11, units = "cm", dpi = 1200)
+```
+
+
+### Extreme Deviation
+
+```{r identify_extreme_deviations}
+# Define threshold for extreme deviation
+W_thr <- 2.6
+
+# Calculate extreme deviation metrics for ADHD
+adhd_deviation <- abs(adhd_0y_deviation_roi_fd_matched) > W_thr
+adhd_deviation_pct <- colMeans(adhd_deviation) * 100
+adhd_pos_deviation <- adhd_0y_deviation_roi_fd_matched > W_thr
+adhd_pos_deviation_pct <- colMeans(adhd_pos_deviation) * 100
+adhd_neg_deviation <- adhd_0y_deviation_roi_fd_matched < -W_thr
+adhd_neg_deviation_pct <- colMeans(adhd_neg_deviation) * 100
+
+max(adhd_pos_deviation_pct)
+max(adhd_neg_deviation_pct)
+```
+
+```{r plot_deviation_brainmaps}
+# Load atlas labels
+atlas_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_region_labels.csv"))
+schaefer_label <- read.csv(paste0(root_path, "data/parcellation/", atlas, "_subcortical_region_labels.csv"))
+
+# Positive deviation brain map
+cmap_r <- rev(c("#A63726", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7"))
+print(max(adhd_pos_deviation_pct))
+brain_plot_data <- data.frame(label = atlas_label$label, deviation = unname(adhd_pos_deviation_pct[1:cortex_num]))
+p <- ggplot() +
+  geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+             mapping = aes(fill = deviation, colour = deviation), show.legend = FALSE, position = position_brain(hemi~side)) +
+  scale_fill_gradientn(colours = cmap_r, limits = c(0, 6), oob = squish) +
+  theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+print(p)
+ggsave(paste0(outpath, "/adhd_pos_deviation_pct_fd_matched.png"), bg = "transparent", 
+       plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+
+# Negative deviation brain map
+cmap_b <- c("#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2C678C")
+print(max(adhd_neg_deviation_pct))
+brain_plot_data <- data.frame(label = atlas_label, deviation = adhd_neg_deviation_pct[1:cortex_num])
+p <- ggplot() +
+  geom_brain(data = brain_plot_data, atlas = get(paste0("schaefer7_", cortex_num)),
+             mapping = aes(fill = deviation, colour = deviation), show.legend = FALSE, position = position_brain(hemi~side)) +
+  scale_fill_gradientn(colours = cmap_b, limits = c(0, 4), oob = squish) +
+  theme_void() + guides(color = "none") + theme(plot.title = element_text(size = 20, hjust = 0.5))
+print(p)
+ggsave(paste0(outpath, "/adhd_neg_deviation_pct_fd_matched.png"), bg = "transparent", 
+       plot = p, width = 13, height = 11, units = "cm", dpi = 1200)
+```
